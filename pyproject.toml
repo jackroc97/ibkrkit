@@ -3,7 +3,7 @@ requires = ["setuptools>=62.6"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "btkit"
+name = "ibkrkit"
 version = "0.0.1"
 authors = [
   { name="Jack Rochester", email="rochester.jack@proton.me" },
