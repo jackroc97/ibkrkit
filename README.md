@@ -1,2 +1,2 @@
-# ibkit
+# ibkrkit
 A python library for building trading bots using ib_async.
