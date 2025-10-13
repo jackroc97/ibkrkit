@@ -105,7 +105,7 @@ class IbkrOptionChain:
                 updated_count += 1
                 if write_status:
                     print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Requesting market data for {updated_count} of {len(self._chain_flat)*2} options...", end='\r', flush=True)
-                    asyncio.sleep(0.01)
+                    await asyncio.sleep(0.01)
                 
                 # Create the contract object and fetch the ticker
                 contract = Contract(
