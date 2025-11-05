@@ -11,9 +11,7 @@ class IbkrLogger:
     
     def __init__(self, db_file_path: str):
         self.db_file_path = db_file_path
-        
-        if not os.path.exists(db_file_path):
-            self.create_database(self.db_file_path)
+        self.create_database(self.db_file_path)
             
     
     def start_session(self, strategy_name: str, strategy_version: str):
@@ -75,11 +73,6 @@ class IbkrLogger:
     
     @classmethod
     def create_database(cls, db_file_path: str) -> None:
-        
-        if os.path.exists(db_file_path):
-            print("Error: database already exists.")
-            return
-        
         con = sqlite3.connect(db_file_path)
         cur = con.cursor()
         
