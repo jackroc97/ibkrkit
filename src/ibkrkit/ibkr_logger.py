@@ -73,6 +73,8 @@ class IbkrLogger:
     
     @classmethod
     def create_database(cls, db_file_path: str) -> None:
+        print("Creating database...")
+        
         con = sqlite3.connect(db_file_path)
         cur = con.cursor()
         
