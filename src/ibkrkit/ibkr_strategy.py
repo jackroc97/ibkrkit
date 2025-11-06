@@ -7,28 +7,20 @@ from typing import List, Union
 
 from ib_async import *
 
-from .ibkr_logger import IbkrLogger
-
 
 class IbkrStrategy:
     name: str
-    version: str
-    log_db_path: str
-    
+    version: str    
     
     def __init__(self):
         self.now: datetime = None
-        self.logger = IbkrLogger(self.log_db_path)
-
 
     def run(self, host: str = '127.0.0.1', port: int = 7496, client_id: int = 1, account_id: str = ""):
         nest_asyncio.apply()
         asyncio.run(self._run(host, port, client_id, account_id=account_id))
         
 
-    async def _run(self, host: str, port: int, client_id: int, account_id: str):
-        self.logger.start_session(strategy_name=self.name, strategy_version=self.version)
-        
+    async def _run(self, host: str, port: int, client_id: int, account_id: str):        
         self.ib = IB()
         self.ib.connect(host=host, port=port, clientId=client_id, account=account_id)  
     
@@ -46,7 +38,6 @@ class IbkrStrategy:
             print_exception(e)
         finally:
             await self.on_stop()
-            self.logger.end_session()
             self.ib.disconnect()
         
         

@@ -7,16 +7,19 @@ from datetime import datetime
 from ib_async import *
 
 
+# TODO: This logger is deprecated and should be removed
+# Prefer use of the built-in IBKR logger using ib_async.util.logToFile, which 
+# will capture all actions reported by the API directly.  Although the data is
+# comprehensive, a new tool needs to be written to post-process output from 
+# logToFile into a more useful format.
 class IbkrLogger:
     
     def __init__(self, db_file_path: str):
-        return
         self.db_file_path = db_file_path
         self.create_database(self.db_file_path)
             
     
     def start_session(self, strategy_name: str, strategy_version: str):
-        return
         self.con = sqlite3.connect(self.db_file_path)
         cur = self.con.cursor()
         
@@ -37,7 +40,6 @@ class IbkrLogger:
     
     
     def end_session(self):
-        return
         cur = self.con.cursor()
         end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S%z")
         cur.execute(f'''
@@ -50,7 +52,6 @@ class IbkrLogger:
         
         
     def log_order(self, order: Order, aux_data: dict = None):
-        return
         cur = self.con.cursor()
         time = datetime.now().strftime("%Y-%m-%d %H:%M:%S%z")
         
@@ -63,7 +64,6 @@ class IbkrLogger:
     
     
     def log_fill(self, trade: Trade, fill: Fill):
-        return
         cur = self.con.cursor()
         time = datetime.now().strftime("%Y-%m-%d %H:%M:%S%z")
         con = fill.contract if fill.contract is not None else trade.contract
@@ -78,9 +78,6 @@ class IbkrLogger:
     
     @classmethod
     def create_database(cls, db_file_path: str) -> None:
-        return
-        print("Creating database...")
-        
         con = sqlite3.connect(db_file_path)
         cur = con.cursor()
         
