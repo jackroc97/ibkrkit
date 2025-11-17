@@ -78,28 +78,38 @@ class IbkrStrategy:
         pass
 
 
-    def place_bracket_order(self, contract: Contract, open_action: str, quantity: int, limit_price: float, take_profit_price: float, stop_loss_price: float) -> list[Trade]:
+    def place_bracket_order(self, contract: Contract, open_action: str, quantity: int, limit_price: float, take_profit_price: float, stop_loss_price: float = None) -> list[Trade]:
         close_action = "SELL" if open_action == "BUY" else "BUY"
         
-        order = LimitOrder(action=open_action, totalQuantity=quantity, lmtPrice=limit_price, tif="GTC")
+        order = LimitOrder(action=open_action, totalQuantity=quantity, lmtPrice=limit_price, tif="FOK")
         take_profit = LimitOrder(action=close_action, totalQuantity=quantity, lmtPrice=take_profit_price, tif="GTC")
-        stop_loss = StopOrder(action=close_action, totalQuantity=quantity, stopPrice=stop_loss_price, tif="GTC")
                 
         order.ocaGroup = f"oco_{self.now.strftime('%Y%m%d_%H%M%S')}"
         take_profit.ocaGroup = order.ocaGroup
-        stop_loss.ocaGroup = order.ocaGroup
                 
         order.orderId = self.ib.client.getReqId()
         order.transmit = False
         take_profit.orderId = self.ib.client.getReqId()
         take_profit.parentId = order.orderId
-        take_profit.transmit = False
-        stop_loss.orderId = self.ib.client.getReqId()
-        stop_loss.parentId = order.orderId
-        stop_loss.transmit = True
+        take_profit.transmit = True
+        
+        orders = [order, take_profit]
+        
+        if stop_loss_price is not None:
+            stop_loss = StopOrder(action=close_action, totalQuantity=quantity, stopPrice=stop_loss_price, tif="GTC")
+            stop_loss.ocaGroup = order.ocaGroup
+
+            stop_loss.orderId = self.ib.client.getReqId()
+            stop_loss.parentId = order.orderId
+            
+            # Set the take-profit order transmit property to False if we have a stop loss
+            orders[-1].transmit = False
+            stop_loss.transmit = True
+            
+            orders.append(stop_loss)
                 
         trades = []
-        for ord in [order, take_profit, stop_loss]:
+        for ord in orders:
             trade = self.ib.placeOrder(contract, ord)
             trade.filledEvent += self.on_order_filled
             trade.fillEvent += self.on_order_partial_fill
