@@ -25,7 +25,7 @@ class IbkrDataStream:
         print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Starting data stream for {self.contract.localSymbol}...")
         
         # Qualify the contract, request market data, and the default update handler
-        await self._ib.qualifyContractsAsync(self.contract)
+        self.contract = (await self._ib.qualifyContractsAsync(self.contract))[0]
         self._ticker = self._ib.reqMktData(self.contract, snapshot=False, regulatorySnapshot=False)
         self._ticker.updateEvent += self._on_update
 
