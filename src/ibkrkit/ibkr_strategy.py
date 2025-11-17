@@ -81,7 +81,7 @@ class IbkrStrategy:
     def place_bracket_order(self, contract: Contract, open_action: str, quantity: int, limit_price: float, take_profit_price: float, stop_loss_price: float = None) -> list[Trade]:
         close_action = "SELL" if open_action == "BUY" else "BUY"
         
-        order = LimitOrder(action=open_action, totalQuantity=quantity, lmtPrice=limit_price, tif="FOK")
+        order = LimitOrder(action=open_action, totalQuantity=quantity, lmtPrice=limit_price, tif="GTC")
         take_profit = LimitOrder(action=close_action, totalQuantity=quantity, lmtPrice=take_profit_price, tif="GTC")
                 
         order.ocaGroup = f"oco_{self.now.strftime('%Y%m%d_%H%M%S')}"
