@@ -196,4 +196,4 @@ class IbkrOptionChain:
         id_best_delta = (matched_exp[delta_col] - desired_delta).abs().idxmin()
         best_delta = matched_exp.loc[id_best_delta]
         best_strike = best_delta['strike']
-        return best_strike, best_delta[delta_col]
+        return best_strike, best_delta[delta_col], best_delta["tradingClass"]
