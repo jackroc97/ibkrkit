@@ -47,11 +47,15 @@ class IbkrOptionChain:
         if write_status:
             print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Fetching options chain for {self.contract.symbol}...", flush=True)
         
+        print(f"Requesting options chain for {self.contract.symbol}, {self.contract.exchange}, {self.contract.secType}, {self.contract.conId}")
+        
         # Request the options chain from IBKR TWS 
         chain = self._ib.reqSecDefOptParams(self.contract.symbol, 
                                             self.contract.exchange, 
                                             self.contract.secType, 
                                             self.contract.conId)
+        
+        print(f"Received options chain with {len(chain)} rows.")
         
         # Flatten the options chain data into a DataFrame
         rows = []
