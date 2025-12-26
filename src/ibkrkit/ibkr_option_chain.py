@@ -189,7 +189,7 @@ class IbkrOptionChain:
         return chain_flat
             
             
-    def find_best_strike_by_delta(self, option_type: str, desired_exp: date, desired_delta: float) -> tuple[float, float]:
+    def find_best_strike_by_delta(self, option_type: str, desired_exp: date, desired_delta: float) -> tuple[float, float, float]:
         chain = self.as_df()
         expiration = desired_exp.strftime("%Y%m%d")
         matched_exp = chain[chain["expiration"] == expiration]
