@@ -268,9 +268,8 @@ class IbkrStrategy:
     def print_msg(self, msg: str, overwrite: bool = False) -> None:
         formatted = f"{self.now.strftime('%Y-%m-%d %H:%M:%S')} | {msg}"
         if overwrite:
-            # Use carriage return to overwrite the previous line
-            # Clear line with spaces and return to start before printing
-            print(f"\r{formatted}", end="", flush=True)
+            # Use carriage return to move to start, then ANSI escape to clear line
+            print(f"\r\033[K{formatted}", end="", flush=True)
         else:
             print(formatted) 
     
