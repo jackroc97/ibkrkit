@@ -81,7 +81,7 @@ class IbkrStrategy:
                     await self.tick()
                     await asyncio.sleep(self._tick_freq_seconds)
                 else:
-                    self.print_msg(f"Strategy is in sleep mode between {self._day_stop_time} and {self._day_start_time}")
+                    print(f"{self.now.strftime('%Y-%m-%d %H:%M:%S')} | Strategy is in sleep mode between {self._day_stop_time} and {self._day_start_time}")
                     await asyncio.sleep(60) # Sleep for 1 minute in sleep mode
                 
 
