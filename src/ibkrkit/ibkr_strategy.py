@@ -79,6 +79,8 @@ class IbkrStrategy:
                 # Only call tick when in live mode
                 if self._is_live:
                     await self.tick()
+                else:
+                    self.print_msg("Strategy is in sleep mode", overwrite=True)
 
                 await asyncio.sleep(self._tick_freq_seconds)
 
@@ -263,8 +265,14 @@ class IbkrStrategy:
         return trades
     
     
-    def print_msg(self, msg: str) -> None:
-        print(f"{self.now.strftime('%Y-%m-%d %H:%M:%S')} | {msg}") 
+    def print_msg(self, msg: str, overwrite: bool = False) -> None:
+        formatted = f"{self.now.strftime('%Y-%m-%d %H:%M:%S')} | {msg}"
+        if overwrite:
+            # Use carriage return to overwrite the previous line
+            # Clear line with spaces and return to start before printing
+            print(f"\r{formatted}", end="", flush=True)
+        else:
+            print(formatted) 
     
     
     def position_as_str(self, position: Union[Position, List[Position]]) -> str:
