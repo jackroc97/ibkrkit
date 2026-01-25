@@ -19,6 +19,7 @@ class IbkrStrategy:
         self._day_start_time: Optional[time] = None
         self._day_stop_time: Optional[time] = None
         self._tick_freq_seconds: int = 5
+        self._weekday_only: bool = True
 
     @property
     def is_live(self) -> bool:
@@ -30,6 +31,11 @@ class IbkrStrategy:
         """Returns the configured tick frequency in seconds."""
         return self._tick_freq_seconds
 
+    @property
+    def weekday_only(self) -> bool:
+        """Returns True if the strategy only enters live mode on weekdays."""
+        return self._weekday_only
+
     def run(
         self,
         host: str = '127.0.0.1',
@@ -38,11 +44,13 @@ class IbkrStrategy:
         account_id: str = "",
         day_start_time: Optional[time] = None,
         day_stop_time: Optional[time] = None,
-        tick_freq_seconds: int = 5
+        tick_freq_seconds: int = 5,
+        weekday_only: bool = True
     ):
         self._day_start_time = day_start_time
         self._day_stop_time = day_stop_time
         self._tick_freq_seconds = tick_freq_seconds
+        self._weekday_only = weekday_only
         nest_asyncio.apply()
         asyncio.run(self._run(host, port, client_id, account_id=account_id))
 
@@ -85,6 +93,11 @@ class IbkrStrategy:
 
     def _should_be_live(self, now: datetime) -> bool:
         """Determine if the strategy should be in live mode based on current time."""
+        # Never enter live mode on weekends if weekday_only is True
+        # weekday() returns 0-4 for Mon-Fri, 5-6 for Sat-Sun
+        if self._weekday_only and now.weekday() >= 5:
+            return False
+
         # If no times configured, always live (backward compatible behavior)
         if self._day_start_time is None and self._day_stop_time is None:
             return True
