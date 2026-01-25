@@ -79,10 +79,11 @@ class IbkrStrategy:
                 # Only call tick when in live mode
                 if self._is_live:
                     await self.tick()
+                    await asyncio.sleep(self._tick_freq_seconds)
                 else:
-                    self.print_msg(f"Strategy is in sleep mode between {self._day_stop_time} and {self._day_start_time}", overwrite=True)
-
-                await asyncio.sleep(self._tick_freq_seconds)
+                    self.print_msg(f"Strategy is in sleep mode between {self._day_stop_time} and {self._day_start_time}")
+                    await asyncio.sleep(60) # Sleep for 1 minute in sleep mode
+                
 
         except Exception as e:
             print_exception(e)
