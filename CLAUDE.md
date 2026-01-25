@@ -21,10 +21,23 @@ Requires Python 3.11+ and a running IBKR Gateway or TWS instance.
 
 ### Core Components
 
-**IbkrStrategy** (`ibkr_strategy.py`): Base class for trading strategies. Subclass and implement:
-- `on_start()`: Called once when strategy begins
-- `tick()`: Called every 5 seconds during the trading day
-- `on_stop()`: Called when strategy ends
+**IbkrStrategy** (`ibkr_strategy.py`): Base class for trading strategies. Supports two modes of operation:
+- **Live mode**: `tick()` is called at the configured frequency
+- **Sleep mode**: Strategy stays connected but `tick()` is not called
+
+Subclass and implement:
+- `on_strategy_init()`: Called once when strategy starts
+- `on_day_start()`: Called each time live mode begins
+- `tick()`: Called at `tick_freq_seconds` interval during live mode
+- `on_day_end()`: Called each time live mode ends
+- `on_strategy_shutdown()`: Called once when strategy stops
+
+Run parameters:
+- `day_start_time`: `time` object for when live mode starts each day (e.g., `time(9, 30)`)
+- `day_stop_time`: `time` object for when live mode ends each day (e.g., `time(16, 0)`)
+- `tick_freq_seconds`: Tick frequency in seconds (default: 5)
+
+If both `day_start_time` and `day_stop_time` are `None`, strategy runs in "always live" mode.
 
 Provides bracket order placement with OCA (One-Cancels-All) groups and event handlers for order fills/cancellations.
 
