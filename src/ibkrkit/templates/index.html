@@ -82,6 +82,18 @@
         tr:last-child td {
             border-bottom: none;
         }
+        /* Combo leg rows have no top border when following first leg */
+        tr.combo-leg td {
+            padding-top: 4px;
+            border-bottom: none;
+        }
+        tr.combo-first td {
+            padding-bottom: 4px;
+        }
+        tr.combo-leg + tr:not(.combo-leg) td,
+        tr.combo-first + tr:not(.combo-leg) td {
+            border-top: 1px solid #333;
+        }
         /* Table header styles - uniform across all columns */
         th {
             padding: 6px 12px;
@@ -100,7 +112,7 @@
         }
         /* Table cell styles - only apply to td elements */
         td.col-qty {
-            width: 50px;
+            width: 60px;
             text-align: right;
             font-weight: 600;
             color: #fff;
@@ -117,13 +129,13 @@
             white-space: nowrap;
         }
         td.col-price {
-            width: 70px;
+            width: 80px;
             text-align: right;
             color: #888;
             white-space: nowrap;
         }
         td.col-time {
-            width: 50px;
+            width: 90px;
             text-align: left;
             color: #666;
             font-size: 12px;
@@ -294,7 +306,7 @@
                             <tr>
                                 <td class="col-qty">{{ pos.quantity }}x</td>
                                 <td class="col-desc">{{ pos.description }}</td>
-                                <td class="col-pnl {{ 'positive' if pos.pnl >= 0 else 'negative' }}">${{ "%.2f"|format(pos.pnl|abs) if pos.pnl < 0 else "%.2f"|format(pos.pnl) }}</td>
+                                <td class="col-pnl {{ 'positive' if pos.pnl >= 0 else 'negative' }}">${{ "%.2f"|format(pos.pnl|abs) }}</td>
                             </tr>
                             {% endfor %}
                         </tbody>
@@ -316,16 +328,16 @@
                             <tr>
                                 <th class="col-qty">Qty</th>
                                 <th class="col-desc">Instrument</th>
-                                <th class="col-price">Lmt</th>
+                                <th class="col-price">Price</th>
                                 <th class="col-status">Status</th>
                             </tr>
                         </thead>
                         <tbody>
                             {% for order in orders %}
-                            <tr>
+                            <tr class="{% if order.is_combo %}{% if order.is_first_leg %}combo-first{% else %}combo-leg{% endif %}{% endif %}">
                                 <td class="col-qty">{{ order.quantity }}x</td>
                                 <td class="col-desc">{{ order.description }}</td>
-                                <td class="col-price">${{ "%.2f"|format(order.limit_price) }}</td>
+                                <td class="col-price">{{ order.price_display }}</td>
                                 <td class="col-status neutral">{{ order.status }}</td>
                             </tr>
                             {% endfor %}
@@ -354,11 +366,11 @@
                         </thead>
                         <tbody>
                             {% for trade in trades %}
-                            <tr>
+                            <tr class="{% if trade.is_combo %}{% if trade.is_first_leg %}combo-first{% else %}combo-leg{% endif %}{% endif %}">
                                 <td class="col-time">{{ trade.time_executed }}</td>
                                 <td class="col-qty">{{ trade.quantity }}x</td>
                                 <td class="col-desc">{{ trade.description }}</td>
-                                <td class="col-price">${{ "%.2f"|format(trade.price) }}</td>
+                                <td class="col-price">{{ trade.price_display }}</td>
                             </tr>
                             {% endfor %}
                         </tbody>
@@ -400,10 +412,6 @@
             return `<td class="col-pnl ${cls}">$${absVal}</td>`;
         }
 
-        function formatPrice(value) {
-            return `<td class="col-price">$${value.toFixed(2)}</td>`;
-        }
-
         function renderPositions(positions) {
             const container = document.getElementById('positions-container');
             if (!positions || positions.length === 0) {
@@ -435,15 +443,16 @@
             let html = '<div class="card"><table><thead><tr>';
             html += '<th class="col-qty">Qty</th>';
             html += '<th class="col-desc">Instrument</th>';
-            html += '<th class="col-price">Lmt</th>';
+            html += '<th class="col-price">Price</th>';
             html += '<th class="col-status">Status</th>';
             html += '</tr></thead><tbody>';
             for (const order of orders) {
-                html += `<tr>
+                const comboClass = order.is_combo ? (order.is_first_leg ? 'combo-first' : 'combo-leg') : '';
+                html += `<tr class="${comboClass}">
                     <td class="col-qty">${order.quantity}x</td>
                     <td class="col-desc">${order.description}</td>
-                    ${formatPrice(order.limit_price)}
-                    <td class="col-status neutral">${order.status}</td>
+                    <td class="col-price">${order.price_display || ''}</td>
+                    <td class="col-status neutral">${order.status || ''}</td>
                 </tr>`;
             }
             html += '</tbody></table></div>';
@@ -472,11 +481,12 @@
             html += '<th class="col-price">Price</th>';
             html += '</tr></thead><tbody>';
             for (const trade of filteredTrades) {
-                html += `<tr>
-                    <td class="col-time">${trade.time_executed}</td>
+                const comboClass = trade.is_combo ? (trade.is_first_leg ? 'combo-first' : 'combo-leg') : '';
+                html += `<tr class="${comboClass}">
+                    <td class="col-time">${trade.time_executed || ''}</td>
                     <td class="col-qty">${trade.quantity}x</td>
                     <td class="col-desc">${trade.description}</td>
-                    ${formatPrice(trade.price)}
+                    <td class="col-price">${trade.price_display || ''}</td>
                 </tr>`;
             }
             html += '</tbody></table></div>';

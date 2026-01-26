@@ -66,6 +66,7 @@ class IbkrStrategy:
         self.now = datetime.now()
 
         # Start webapp if enabled
+        self._webapp = None
         if self._webapp_enabled:
             from .ibkr_webapp import IbkrWebapp
             self._webapp = IbkrWebapp(self.ib, self)
@@ -85,6 +86,10 @@ class IbkrStrategy:
 
                 # Check for mode transitions
                 await self._check_mode_transition()
+
+                # Update webapp data from the main event loop (thread-safe)
+                if self._webapp is not None:
+                    self._webapp.collect_data()
 
                 # Only call tick when in live mode
                 if self._is_live:
