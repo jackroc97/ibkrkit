@@ -7,5 +7,5 @@ build/
 dist/
 
 # Claude Code
-.claude/
+.claude
 CLAUDE.md
