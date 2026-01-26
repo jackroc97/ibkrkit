@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from flask import Flask, render_template, Response, jsonify
 
-from ib_async import IB, Option, FuturesOption, Future, Stock
+from ib_async import IB, Option, FuturesOption
 
 if TYPE_CHECKING:
     from .ibkr_strategy import IbkrStrategy
@@ -230,7 +230,7 @@ class IbkrWebapp:
         return trades
 
     def _get_chart_contracts(self) -> list[dict]:
-        """Get contracts for charting from open positions, including underlyings."""
+        """Get contracts for charting from open positions."""
         contracts = []
         seen_con_ids = set()
 
@@ -253,43 +253,7 @@ class IbkrWebapp:
             contracts.append({
                 "conId": contract.conId,
                 "label": label,
-                "type": "position",
             })
-
-            # Add underlying contract if this is an option
-            if isinstance(contract, Option):
-                # Create underlying stock contract
-                underlying = Stock(contract.symbol, "SMART", contract.currency)
-                qualified = self._run_async(self.ib.qualifyContractsAsync(underlying))
-                if qualified:
-                    underlying = qualified[0]
-                    if underlying.conId not in seen_con_ids:
-                        seen_con_ids.add(underlying.conId)
-                        self._contract_cache[underlying.conId] = underlying
-                        contracts.append({
-                            "conId": underlying.conId,
-                            "label": underlying.symbol,
-                            "type": "underlying",
-                        })
-            elif isinstance(contract, FuturesOption):
-                # Create underlying futures contract
-                underlying = Future(
-                    symbol=contract.symbol,
-                    lastTradeDateOrContractMonth=contract.lastTradeDateOrContractMonth,
-                    exchange=contract.exchange,
-                    currency=contract.currency,
-                )
-                qualified = self._run_async(self.ib.qualifyContractsAsync(underlying))
-                if qualified:
-                    underlying = qualified[0]
-                    if underlying.conId not in seen_con_ids:
-                        seen_con_ids.add(underlying.conId)
-                        self._contract_cache[underlying.conId] = underlying
-                        contracts.append({
-                            "conId": underlying.conId,
-                            "label": underlying.localSymbol or underlying.symbol,
-                            "type": "underlying",
-                        })
 
         return contracts
 
