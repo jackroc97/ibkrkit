@@ -82,41 +82,7 @@
         tr:last-child td {
             border-bottom: none;
         }
-        .col-qty {
-            width: 50px;
-            text-align: right;
-            font-weight: 600;
-            color: #fff;
-            white-space: nowrap;
-        }
-        .col-desc {
-            text-align: left;
-            color: #ccc;
-        }
-        .col-pnl {
-            width: 80px;
-            text-align: right;
-            font-weight: 600;
-            white-space: nowrap;
-        }
-        .col-price {
-            width: 70px;
-            text-align: right;
-            color: #888;
-            white-space: nowrap;
-        }
-        .col-time {
-            width: 50px;
-            text-align: left;
-            color: #666;
-            font-size: 12px;
-        }
-        .col-status {
-            width: 80px;
-            text-align: right;
-            font-size: 11px;
-            text-transform: uppercase;
-        }
+        /* Table header styles - uniform across all columns */
         th {
             padding: 6px 12px;
             font-size: 10px;
@@ -126,17 +92,47 @@
             letter-spacing: 0.3px;
             border-bottom: 1px solid #333;
         }
-        th.col-qty {
+        th.col-qty, th.col-pnl, th.col-price, th.col-status {
             text-align: right;
         }
-        th.col-desc {
+        th.col-desc, th.col-time {
             text-align: left;
         }
-        th.col-pnl, th.col-price, th.col-status {
+        /* Table cell styles - only apply to td elements */
+        td.col-qty {
+            width: 50px;
             text-align: right;
+            font-weight: 600;
+            color: #fff;
+            white-space: nowrap;
         }
-        th.col-time {
+        td.col-desc {
             text-align: left;
+            color: #ccc;
+        }
+        td.col-pnl {
+            width: 80px;
+            text-align: right;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        td.col-price {
+            width: 70px;
+            text-align: right;
+            color: #888;
+            white-space: nowrap;
+        }
+        td.col-time {
+            width: 50px;
+            text-align: left;
+            color: #666;
+            font-size: 12px;
+        }
+        td.col-status {
+            width: 80px;
+            text-align: right;
+            font-size: 11px;
+            text-transform: uppercase;
         }
         .stopped-message {
             color: #888;
@@ -183,7 +179,7 @@
         }
         #chart {
             width: 100%;
-            aspect-ratio: 4 / 3;
+            min-height: 200px;
         }
         .chart-toggles {
             display: flex;
@@ -508,12 +504,22 @@
             }
         }
 
+        function getChartDimensions() {
+            const chartContainer = document.getElementById('chart');
+            const width = chartContainer.clientWidth || 400;
+            const height = Math.round(width * 3 / 4); // 4:3 aspect ratio
+            return { width, height };
+        }
+
         function initChart() {
             const chartContainer = document.getElementById('chart');
             if (chart) {
                 chart.remove();
             }
+            const { width, height } = getChartDimensions();
             chart = LightweightCharts.createChart(chartContainer, {
+                width: width,
+                height: height,
                 layout: {
                     background: { type: 'solid', color: '#252525' },
                     textColor: '#888',
@@ -535,6 +541,22 @@
                 },
             });
             chartSeries = {};
+        }
+
+        // ResizeObserver to handle chart resizing
+        let resizeObserver = null;
+        function setupChartResizeObserver() {
+            if (resizeObserver) {
+                resizeObserver.disconnect();
+            }
+            const chartContainer = document.getElementById('chart');
+            resizeObserver = new ResizeObserver(() => {
+                if (chart) {
+                    const { width, height } = getChartDimensions();
+                    chart.resize(width, height);
+                }
+            });
+            resizeObserver.observe(chartContainer);
         }
 
         async function fetchChartData(conId) {
@@ -569,6 +591,7 @@
             if (currentIds !== prevIds) {
                 chartContracts = contracts;
                 initChart();
+                setupChartResizeObserver();
 
                 // Initialize visibility for new contracts
                 for (const contract of contracts) {
@@ -663,8 +686,11 @@
             console.log('SSE connection lost, will retry...');
         };
 
-        // Initialize chart on page load if not stopped
+        // Initialize data on page load
         document.addEventListener('DOMContentLoaded', function() {
+            // Initialize allTrades from server-rendered data
+            allTrades = {{ trades | tojson | safe }};
+
             const state = '{{ state }}';
             if (state !== 'Stopped') {
                 const initialContracts = {{ chart_contracts | tojson | safe }};

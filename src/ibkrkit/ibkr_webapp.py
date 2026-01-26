@@ -270,13 +270,19 @@ class IbkrWebapp:
         if not contract:
             return []
 
+        # Use MIDPOINT for options (TRADES doesn't work), TRADES for others
+        if isinstance(contract, (Option, FuturesOption)):
+            what_to_show = "MIDPOINT"
+        else:
+            what_to_show = "TRADES"
+
         try:
             bars = self._run_async(self.ib.reqHistoricalDataAsync(
                 contract,
                 endDateTime="",
                 durationStr="1 D",
                 barSizeSetting="5 mins",
-                whatToShow="TRADES",
+                whatToShow=what_to_show,
                 useRTH=False,
                 formatDate=1,
             ))
