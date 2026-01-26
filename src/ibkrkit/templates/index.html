@@ -191,7 +191,9 @@
         }
         #chart {
             width: 100%;
-            min-height: 200px;
+            max-width: 600px;
+            min-height: 150px;
+            max-height: 300px;
         }
         .chart-toggles {
             display: flex;
@@ -516,8 +518,9 @@
 
         function getChartDimensions() {
             const chartContainer = document.getElementById('chart');
-            const width = chartContainer.clientWidth || 400;
-            const height = Math.round(width * 3 / 4); // 4:3 aspect ratio
+            const width = Math.min(chartContainer.clientWidth || 400, 600);
+            // 3:4 aspect ratio (3 tall for 4 wide), clamped to max 300px
+            const height = Math.min(Math.round(width * 3 / 4), 300);
             return { width, height };
         }
 

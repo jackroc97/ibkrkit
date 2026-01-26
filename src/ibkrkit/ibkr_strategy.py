@@ -89,7 +89,7 @@ class IbkrStrategy:
 
                 # Update webapp data from the main event loop (thread-safe)
                 if self._webapp is not None:
-                    self._webapp.collect_data()
+                    await self._webapp.collect_data()
 
                 # Only call tick when in live mode
                 if self._is_live:

@@ -131,7 +131,7 @@ class IbkrWebapp:
     # Data Collection Methods (called from main event loop only)
     # -------------------------------------------------------------------------
 
-    def collect_data(self) -> None:
+    async def collect_data(self) -> None:
         """Collect all data from ib_async and update the data store.
 
         This method MUST be called from the main event loop thread.
@@ -140,7 +140,7 @@ class IbkrWebapp:
         state = self._compute_state()
         positions = self._collect_positions()
         orders = self._collect_orders()
-        trades = self._collect_trades()
+        trades = await self._collect_trades()
         chart_contracts = self._collect_chart_contracts()
 
         self._data_store.update(state, positions, orders, trades, chart_contracts)
@@ -295,126 +295,61 @@ class IbkrWebapp:
 
         return orders
 
-    def _collect_trades(self) -> list[dict]:
-        """Collect trades from the past month."""
+    async def _collect_trades(self) -> list[dict]:
+        """Collect trades using execution reports from IB.
+
+        Note: IB only provides execution reports for the current trading day.
+        For historical trades beyond that, external storage would be needed.
+        """
         trades = []
         cutoff = datetime.now() - timedelta(days=30)
 
         try:
-            for trade in self.ib.trades():
-                if not trade.fills:
+            # Request execution reports from IB - this populates ib.fills()
+            # with any executions IB has for the current session/day
+            await self.ib.reqExecutionsAsync()
+
+            # Now get all fills (includes the ones we just requested)
+            all_fills = self.ib.fills()
+
+            for fill in all_fills:
+                fill_time = fill.time
+                if fill_time.tzinfo:
+                    fill_time = fill_time.replace(tzinfo=None)
+                if fill_time < cutoff:
                     continue
 
-                parent_contract = trade.contract
-                is_combo = isinstance(parent_contract, Bag) and parent_contract.comboLegs
+                fill_contract = fill.contract
+                execution = fill.execution
 
-                # Cache the contract
-                if parent_contract.conId:
-                    self._contract_cache[parent_contract.conId] = parent_contract
+                # Cache fill contract
+                if fill_contract.conId:
+                    self._contract_cache[fill_contract.conId] = fill_contract
 
-                # For combo trades, group fills together
-                if is_combo:
-                    # Get fills within cutoff period, sorted by time
-                    valid_fills = []
-                    for fill in trade.fills:
-                        fill_time = fill.time
-                        if fill_time.tzinfo:
-                            fill_time = fill_time.replace(tzinfo=None)
-                        if fill_time >= cutoff:
-                            valid_fills.append(fill)
-
-                    if not valid_fills:
-                        continue
-
-                    # Sort fills by time to ensure consistent ordering
-                    valid_fills.sort(key=lambda f: f.time)
-
-                    # Process each fill as a combo leg
-                    for i, fill in enumerate(valid_fills):
-                        fill_contract = fill.contract
-                        execution = fill.execution
-
-                        # Cache the leg contract
-                        if fill_contract.conId:
-                            self._contract_cache[fill_contract.conId] = fill_contract
-
-                        # Build description from the fill's contract (has full details)
-                        if isinstance(fill_contract, (Option, FuturesOption)):
-                            exp_short = self._format_expiration(fill_contract.lastTradeDateOrContractMonth)
-                            strike = int(fill_contract.strike) if fill_contract.strike == int(fill_contract.strike) else fill_contract.strike
-                            right = self._format_right(fill_contract.right)
-                            description = f"{exp_short} {fill_contract.symbol} {strike} {right}"
-                        else:
-                            description = fill_contract.localSymbol or fill_contract.symbol
-
-                        # Action prefix: BOT = BTO, SLD = STO (simplified)
-                        action_prefix = "BTO" if execution.side == "BOT" else "STO"
-                        qty = int(execution.shares) if execution.shares == int(execution.shares) else execution.shares
-
-                        # Show price only on first leg, with credit/debit suffix
-                        is_first = (i == 0)
-                        if is_first:
-                            # Net price is typically shown on the first leg
-                            # Positive price = debit, negative = credit (from buyer's perspective)
-                            price_val = execution.price
-                            price_suffix = "cr" if execution.side == "SLD" else "db"
-                            price_display = f"${abs(price_val):.2f} {price_suffix}"
-                            time_str = fill.time.strftime("%b %d %H:%M")
-                        else:
-                            price_val = 0.0
-                            price_display = ""
-                            time_str = ""
-
-                        trades.append({
-                            "time_executed": time_str,
-                            "time_sort": fill.time.strftime("%Y-%m-%d %H:%M:%S"),
-                            "quantity": f"{action_prefix} {qty}",
-                            "description": description,
-                            "price": price_val,
-                            "price_display": price_display,
-                            "is_combo": True,
-                            "is_first_leg": is_first,
-                        })
+                # Build description
+                if isinstance(fill_contract, (Option, FuturesOption)):
+                    symbol = fill_contract.symbol
+                    exp_short = self._format_expiration(fill_contract.lastTradeDateOrContractMonth)
+                    strike = int(fill_contract.strike) if fill_contract.strike == int(fill_contract.strike) else fill_contract.strike
+                    right = self._format_right(fill_contract.right)
+                    description = f"{exp_short} {symbol} {strike} {right}"
                 else:
-                    # Regular single-leg trades
-                    for fill in trade.fills:
-                        fill_time = fill.time
-                        if fill_time.tzinfo:
-                            fill_time = fill_time.replace(tzinfo=None)
-                        if fill_time < cutoff:
-                            continue
+                    symbol = fill_contract.localSymbol or fill_contract.symbol
+                    description = symbol
 
-                        fill_contract = fill.contract
-                        execution = fill.execution
+                qty = int(execution.shares) if execution.shares == int(execution.shares) else execution.shares
+                action_prefix = "+" if execution.side == "BOT" else "-"
+                time_str = fill.time.strftime("%b %d %H:%M")
 
-                        # Cache fill contract
-                        if fill_contract.conId:
-                            self._contract_cache[fill_contract.conId] = fill_contract
-
-                        # Build description
-                        if isinstance(fill_contract, (Option, FuturesOption)):
-                            symbol = fill_contract.symbol
-                            exp_short = self._format_expiration(fill_contract.lastTradeDateOrContractMonth)
-                            strike = int(fill_contract.strike) if fill_contract.strike == int(fill_contract.strike) else fill_contract.strike
-                            right = self._format_right(fill_contract.right)
-                            description = f"{exp_short} {symbol} {strike} {right}"
-                        else:
-                            symbol = fill_contract.localSymbol or fill_contract.symbol
-                            description = symbol
-
-                        qty = int(execution.shares) if execution.shares == int(execution.shares) else execution.shares
-                        action_prefix = "+" if execution.side == "BOT" else "-"
-                        time_str = fill.time.strftime("%b %d %H:%M")
-
-                        trades.append({
-                            "time_executed": time_str,
-                            "time_sort": fill.time.strftime("%Y-%m-%d %H:%M:%S"),
-                            "quantity": f"{action_prefix}{qty}",
-                            "description": description,
-                            "price": execution.price,
-                            "price_display": f"${execution.price:.2f}",
-                            "is_combo": False,
-                        })
+                trades.append({
+                    "time_executed": time_str,
+                    "time_sort": fill.time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "quantity": f"{action_prefix}{qty}",
+                    "description": description,
+                    "price": execution.price,
+                    "price_display": f"${execution.price:.2f}",
+                    "is_combo": False,
+                })
         except Exception:
             pass  # Return empty list on error
 
@@ -463,46 +398,53 @@ class IbkrWebapp:
         """
         contract = self._contract_cache.get(con_id)
         if not contract:
+            print(f"[Chart] No contract found for conId {con_id}")
             return []
 
+        if self._loop is None:
+            print("[Chart] No event loop available")
+            return []
+
+        # For options, try MIDPOINT first, then BID_ASK as fallback
+        # For other instruments, use TRADES
         if isinstance(contract, (Option, FuturesOption)):
-            what_to_show = "MIDPOINT"
+            what_to_show_options = ["MIDPOINT", "BID_ASK"]
         else:
-            what_to_show = "TRADES"
+            what_to_show_options = ["TRADES", "MIDPOINT"]
 
-        try:
-            if self._loop is None:
-                return []
+        for what_to_show in what_to_show_options:
+            try:
+                future = asyncio.run_coroutine_threadsafe(
+                    self.ib.reqHistoricalDataAsync(
+                        contract,
+                        endDateTime="",
+                        durationStr="1 D",
+                        barSizeSetting="5 mins",
+                        whatToShow=what_to_show,
+                        useRTH=False,
+                        formatDate=1,
+                    ),
+                    self._loop
+                )
+                bars = future.result(timeout=15.0)
 
-            future = asyncio.run_coroutine_threadsafe(
-                self.ib.reqHistoricalDataAsync(
-                    contract,
-                    endDateTime="",
-                    durationStr="1 D",
-                    barSizeSetting="5 mins",
-                    whatToShow=what_to_show,
-                    useRTH=False,
-                    formatDate=1,
-                ),
-                self._loop
-            )
-            bars = future.result(timeout=10.0)
+                if bars:
+                    return [
+                        {
+                            "time": int(bar.date.timestamp()),
+                            "open": bar.open,
+                            "high": bar.high,
+                            "low": bar.low,
+                            "close": bar.close,
+                        }
+                        for bar in bars
+                    ]
+            except Exception as e:
+                print(f"[Chart] Error fetching {what_to_show} data for {con_id}: {e}")
+                continue
 
-            if not bars:
-                return []
-
-            return [
-                {
-                    "time": int(bar.date.timestamp()),
-                    "open": bar.open,
-                    "high": bar.high,
-                    "low": bar.low,
-                    "close": bar.close,
-                }
-                for bar in bars
-            ]
-        except Exception:
-            return []
+        print(f"[Chart] No data available for conId {con_id}")
+        return []
 
     # -------------------------------------------------------------------------
     # Lifecycle
