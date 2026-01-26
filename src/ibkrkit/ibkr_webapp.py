@@ -4,9 +4,9 @@ import time
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
-from flask import Flask, render_template, Response
+from flask import Flask, render_template, Response, jsonify
 
-from ib_async import IB, Option, FuturesOption
+from ib_async import IB, Option, FuturesOption, Future, Stock
 
 if TYPE_CHECKING:
     from .ibkr_strategy import IbkrStrategy
@@ -20,6 +20,7 @@ class IbkrWebapp:
         self.strategy = strategy
         self._app = self._create_app()
         self._thread = None
+        self._contract_cache = {}  # conId -> contract for underlying lookups
 
     def _create_app(self) -> Flask:
         """Create and configure the Flask application."""
@@ -35,6 +36,7 @@ class IbkrWebapp:
                 positions=self._get_positions(),
                 orders=self._get_open_orders(),
                 trades=self._get_recent_trades(),
+                chart_contracts=self._get_chart_contracts(),
                 last_updated=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             )
 
@@ -48,6 +50,7 @@ class IbkrWebapp:
                         "positions": self._get_positions(),
                         "orders": self._get_open_orders(),
                         "trades": self._get_recent_trades(),
+                        "chart_contracts": self._get_chart_contracts(),
                         "last_updated": datetime.now().strftime("%H:%M:%S"),
                     }
                     yield f"data: {json.dumps(data)}\n\n"
@@ -61,6 +64,12 @@ class IbkrWebapp:
                     "Connection": "keep-alive",
                 }
             )
+
+        @app.route("/chart_data/<int:con_id>")
+        def chart_data(con_id):
+            """Get historical price data for a contract."""
+            data = self._get_historical_data(con_id)
+            return jsonify(data)
 
         return app
 
@@ -167,9 +176,9 @@ class IbkrWebapp:
         return orders
 
     def _get_recent_trades(self) -> list[dict]:
-        """Get trades from the past 48 hours."""
+        """Get trades from the past month (filtering done client-side)."""
         trades = []
-        cutoff = datetime.now() - timedelta(hours=48)
+        cutoff = datetime.now() - timedelta(days=30)
 
         for trade in self.ib.trades():
             # Only include trades with fills
@@ -217,6 +226,107 @@ class IbkrWebapp:
         # Sort by time, most recent first
         trades.sort(key=lambda x: x["time_sort"], reverse=True)
         return trades
+
+    def _get_chart_contracts(self) -> list[dict]:
+        """Get contracts for charting from open positions, including underlyings."""
+        contracts = []
+        seen_con_ids = set()
+
+        for pos in self.ib.positions():
+            contract = pos.contract
+            if contract.conId in seen_con_ids:
+                continue
+            seen_con_ids.add(contract.conId)
+            self._contract_cache[contract.conId] = contract
+
+            # Build label for the contract
+            if isinstance(contract, (Option, FuturesOption)):
+                exp_short = self._format_expiration(contract.lastTradeDateOrContractMonth)
+                strike = int(contract.strike) if contract.strike == int(contract.strike) else contract.strike
+                right = self._format_right(contract.right)
+                label = f"{contract.symbol} {exp_short} {strike} {right}"
+            else:
+                label = contract.localSymbol or contract.symbol
+
+            contracts.append({
+                "conId": contract.conId,
+                "label": label,
+                "type": "position",
+            })
+
+            # Add underlying contract if this is an option
+            if isinstance(contract, Option):
+                # Create underlying stock contract
+                underlying = Stock(contract.symbol, "SMART", contract.currency)
+                qualified = self.ib.qualifyContracts(underlying)
+                if qualified:
+                    underlying = qualified[0]
+                    if underlying.conId not in seen_con_ids:
+                        seen_con_ids.add(underlying.conId)
+                        self._contract_cache[underlying.conId] = underlying
+                        contracts.append({
+                            "conId": underlying.conId,
+                            "label": underlying.symbol,
+                            "type": "underlying",
+                        })
+            elif isinstance(contract, FuturesOption):
+                # Create underlying futures contract
+                underlying = Future(
+                    symbol=contract.symbol,
+                    lastTradeDateOrContractMonth=contract.lastTradeDateOrContractMonth,
+                    exchange=contract.exchange,
+                    currency=contract.currency,
+                )
+                qualified = self.ib.qualifyContracts(underlying)
+                if qualified:
+                    underlying = qualified[0]
+                    if underlying.conId not in seen_con_ids:
+                        seen_con_ids.add(underlying.conId)
+                        self._contract_cache[underlying.conId] = underlying
+                        contracts.append({
+                            "conId": underlying.conId,
+                            "label": underlying.localSymbol or underlying.symbol,
+                            "type": "underlying",
+                        })
+
+        return contracts
+
+    def _get_historical_data(self, con_id: int) -> list[dict]:
+        """Get historical price data for a contract."""
+        # Find the contract from cache or positions
+        contract = self._contract_cache.get(con_id)
+        if not contract:
+            for pos in self.ib.positions():
+                if pos.contract.conId == con_id:
+                    contract = pos.contract
+                    break
+
+        if not contract:
+            return []
+
+        try:
+            bars = self.ib.reqHistoricalData(
+                contract,
+                endDateTime="",
+                durationStr="1 D",
+                barSizeSetting="5 mins",
+                whatToShow="TRADES",
+                useRTH=False,
+                formatDate=1,
+            )
+
+            return [
+                {
+                    "time": int(bar.date.timestamp()),
+                    "open": bar.open,
+                    "high": bar.high,
+                    "low": bar.low,
+                    "close": bar.close,
+                }
+                for bar in bars
+            ]
+        except Exception:
+            return []
 
     def start(self, port: int = 5000) -> None:
         """Start the Flask webapp in a daemon thread."""

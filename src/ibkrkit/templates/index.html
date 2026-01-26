@@ -120,8 +120,8 @@
         th {
             padding: 6px 12px;
             font-size: 10px;
-            font-weight: 500;
-            color: #666;
+            font-weight: 600;
+            color: #888;
             text-transform: uppercase;
             letter-spacing: 0.3px;
             border-bottom: 1px solid #333;
@@ -137,6 +137,89 @@
         }
         th.col-time {
             text-align: left;
+        }
+        .stopped-message {
+            color: #888;
+            font-style: italic;
+            padding: 32px 16px;
+            text-align: center;
+            background-color: #252525;
+            border-radius: 8px;
+        }
+        .data-sections {
+            display: block;
+        }
+        .data-sections.hidden {
+            display: none;
+        }
+        .hidden {
+            display: none !important;
+        }
+        .time-range-select {
+            margin-top: 12px;
+            padding: 8px 12px;
+            background-color: #333;
+            color: #e0e0e0;
+            border: 1px solid #444;
+            border-radius: 4px;
+            font-size: 13px;
+            font-family: inherit;
+            cursor: pointer;
+            width: 100%;
+            max-width: 200px;
+        }
+        .time-range-select:focus {
+            outline: none;
+            border-color: #666;
+        }
+        .chart-section {
+            margin-top: 24px;
+        }
+        .chart-container {
+            background-color: #252525;
+            border-radius: 8px;
+            padding: 12px;
+            margin-top: 8px;
+        }
+        #chart {
+            width: 100%;
+            aspect-ratio: 4 / 3;
+        }
+        .chart-toggles {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 12px;
+        }
+        .chart-toggle {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
+            background-color: #333;
+            border: 1px solid #444;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            color: #e0e0e0;
+            transition: opacity 0.2s;
+        }
+        .chart-toggle:hover {
+            border-color: #555;
+        }
+        .chart-toggle.disabled {
+            opacity: 0.4;
+        }
+        .chart-toggle-color {
+            width: 12px;
+            height: 12px;
+            border-radius: 2px;
+        }
+        .chart-empty {
+            color: #666;
+            font-style: italic;
+            padding: 32px 16px;
+            text-align: center;
         }
         .positive {
             color: #22c55e;
@@ -183,97 +266,118 @@
         <div id="status" class="status status-{{ state|lower }}">{{ state }}</div>
     </div>
 
-    <div class="section">
-        <div class="section-title">Positions</div>
-        <div id="positions-container">
-            {% if positions %}
-            <div class="card">
-                <table>
-                    <thead>
-                        <tr>
-                            <th class="col-qty">Qty</th>
-                            <th class="col-desc">Instrument</th>
-                            <th class="col-pnl">PnL</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for pos in positions %}
-                        <tr>
-                            <td class="col-qty">{{ pos.quantity }}x</td>
-                            <td class="col-desc">{{ pos.description }}</td>
-                            <td class="col-pnl {{ 'positive' if pos.pnl >= 0 else 'negative' }}">${{ "%.2f"|format(pos.pnl|abs) if pos.pnl < 0 else "%.2f"|format(pos.pnl) }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-            {% else %}
-            <div class="empty-message">No open positions</div>
-            {% endif %}
+    <div id="stopped-message" class="stopped-message {% if state != 'Stopped' %}hidden{% endif %}">
+        Strategy is stopped. Position, order, and trade data is unavailable.
+    </div>
+
+    <div id="chart-section" class="chart-section {% if state == 'Stopped' %}hidden{% endif %}">
+        <div class="section-title">Open Positions Chart</div>
+        <div class="chart-container">
+            <div id="chart"></div>
+            <div id="chart-toggles" class="chart-toggles"></div>
+            <div id="chart-empty" class="chart-empty hidden">No positions to chart</div>
         </div>
     </div>
 
-    <div class="section">
-        <div class="section-title">Open Orders</div>
-        <div id="orders-container">
-            {% if orders %}
-            <div class="card">
-                <table>
-                    <thead>
-                        <tr>
-                            <th class="col-qty">Qty</th>
-                            <th class="col-desc">Instrument</th>
-                            <th class="col-price">Lmt</th>
-                            <th class="col-status">Status</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for order in orders %}
-                        <tr>
-                            <td class="col-qty">{{ order.quantity }}x</td>
-                            <td class="col-desc">{{ order.description }}</td>
-                            <td class="col-price">${{ "%.2f"|format(order.limit_price) }}</td>
-                            <td class="col-status neutral">{{ order.status }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
+    <div id="data-sections" class="data-sections {% if state == 'Stopped' %}hidden{% endif %}">
+        <div class="section">
+            <div class="section-title">Positions</div>
+            <div id="positions-container">
+                {% if positions %}
+                <div class="card">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th class="col-qty">Qty</th>
+                                <th class="col-desc">Instrument</th>
+                                <th class="col-pnl">PnL</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for pos in positions %}
+                            <tr>
+                                <td class="col-qty">{{ pos.quantity }}x</td>
+                                <td class="col-desc">{{ pos.description }}</td>
+                                <td class="col-pnl {{ 'positive' if pos.pnl >= 0 else 'negative' }}">${{ "%.2f"|format(pos.pnl|abs) if pos.pnl < 0 else "%.2f"|format(pos.pnl) }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="empty-message">No open positions</div>
+                {% endif %}
             </div>
-            {% else %}
-            <div class="empty-message">No open orders</div>
-            {% endif %}
         </div>
-    </div>
 
-    <div class="section">
-        <div class="section-title">Recent Trades (48h)</div>
-        <div id="trades-container">
-            {% if trades %}
-            <div class="card">
-                <table>
-                    <thead>
-                        <tr>
-                            <th class="col-time">Time</th>
-                            <th class="col-qty">Qty</th>
-                            <th class="col-desc">Instrument</th>
-                            <th class="col-price">Price</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for trade in trades %}
-                        <tr>
-                            <td class="col-time">{{ trade.time_executed }}</td>
-                            <td class="col-qty">{{ trade.quantity }}x</td>
-                            <td class="col-desc">{{ trade.description }}</td>
-                            <td class="col-price">${{ "%.2f"|format(trade.price) }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
+        <div class="section">
+            <div class="section-title">Open Orders</div>
+            <div id="orders-container">
+                {% if orders %}
+                <div class="card">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th class="col-qty">Qty</th>
+                                <th class="col-desc">Instrument</th>
+                                <th class="col-price">Lmt</th>
+                                <th class="col-status">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for order in orders %}
+                            <tr>
+                                <td class="col-qty">{{ order.quantity }}x</td>
+                                <td class="col-desc">{{ order.description }}</td>
+                                <td class="col-price">${{ "%.2f"|format(order.limit_price) }}</td>
+                                <td class="col-status neutral">{{ order.status }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="empty-message">No open orders</div>
+                {% endif %}
             </div>
-            {% else %}
-            <div class="empty-message">No trades in the past 48 hours</div>
-            {% endif %}
+        </div>
+
+        <div class="section">
+            <div class="section-title">Recent Trades</div>
+            <div id="trades-container">
+                {% if trades %}
+                <div class="card">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th class="col-time">Time</th>
+                                <th class="col-qty">Qty</th>
+                                <th class="col-desc">Instrument</th>
+                                <th class="col-price">Price</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for trade in trades %}
+                            <tr>
+                                <td class="col-time">{{ trade.time_executed }}</td>
+                                <td class="col-qty">{{ trade.quantity }}x</td>
+                                <td class="col-desc">{{ trade.description }}</td>
+                                <td class="col-price">${{ "%.2f"|format(trade.price) }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="empty-message">No trades in selected time range</div>
+                {% endif %}
+            </div>
+            <select id="trades-time-range" class="time-range-select">
+                <option value="24">Last 24 Hours</option>
+                <option value="48" selected>Last 48 Hours</option>
+                <option value="168">Last Week</option>
+                <option value="720">Last Month</option>
+            </select>
         </div>
     </div>
 
@@ -281,7 +385,19 @@
         <span class="live-indicator"></span>Live updates | Last: <span id="last-updated">{{ last_updated }}</span>
     </div>
 
+    <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
     <script>
+        let currentTradesHours = 48;
+        let allTrades = [];
+        let chart = null;
+        let chartSeries = {};
+        let chartContracts = [];
+        let contractVisibility = {};
+        const chartColors = [
+            '#2962FF', '#FF6D00', '#00C853', '#D500F9',
+            '#FFD600', '#00B8D4', '#FF1744', '#76FF03'
+        ];
+
         function formatPnl(value) {
             const absVal = Math.abs(value).toFixed(2);
             const cls = value >= 0 ? 'positive' : 'negative';
@@ -338,10 +454,19 @@
             container.innerHTML = html;
         }
 
+        function filterTradesByHours(trades, hours) {
+            const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000);
+            return trades.filter(trade => {
+                const tradeTime = new Date(trade.time_sort);
+                return tradeTime >= cutoff;
+            });
+        }
+
         function renderTrades(trades) {
             const container = document.getElementById('trades-container');
-            if (!trades || trades.length === 0) {
-                container.innerHTML = '<div class="empty-message">No trades in the past 48 hours</div>';
+            const filteredTrades = filterTradesByHours(trades, currentTradesHours);
+            if (!filteredTrades || filteredTrades.length === 0) {
+                container.innerHTML = '<div class="empty-message">No trades in selected time range</div>';
                 return;
             }
             let html = '<div class="card"><table><thead><tr>';
@@ -350,7 +475,7 @@
             html += '<th class="col-desc">Instrument</th>';
             html += '<th class="col-price">Price</th>';
             html += '</tr></thead><tbody>';
-            for (const trade of trades) {
+            for (const trade of filteredTrades) {
                 html += `<tr>
                     <td class="col-time">${trade.time_executed}</td>
                     <td class="col-qty">${trade.quantity}x</td>
@@ -368,21 +493,184 @@
             el.className = 'status status-' + state.toLowerCase();
         }
 
+        function updateVisibility(state) {
+            const stoppedMsg = document.getElementById('stopped-message');
+            const dataSections = document.getElementById('data-sections');
+            const chartSection = document.getElementById('chart-section');
+            if (state === 'Stopped') {
+                stoppedMsg.classList.remove('hidden');
+                dataSections.classList.add('hidden');
+                chartSection.classList.add('hidden');
+            } else {
+                stoppedMsg.classList.add('hidden');
+                dataSections.classList.remove('hidden');
+                chartSection.classList.remove('hidden');
+            }
+        }
+
+        function initChart() {
+            const chartContainer = document.getElementById('chart');
+            if (chart) {
+                chart.remove();
+            }
+            chart = LightweightCharts.createChart(chartContainer, {
+                layout: {
+                    background: { type: 'solid', color: '#252525' },
+                    textColor: '#888',
+                },
+                grid: {
+                    vertLines: { color: '#333' },
+                    horzLines: { color: '#333' },
+                },
+                rightPriceScale: {
+                    borderColor: '#333',
+                },
+                timeScale: {
+                    borderColor: '#333',
+                    timeVisible: true,
+                    secondsVisible: false,
+                },
+                crosshair: {
+                    mode: LightweightCharts.CrosshairMode.Normal,
+                },
+            });
+            chartSeries = {};
+        }
+
+        async function fetchChartData(conId) {
+            try {
+                const response = await fetch(`/chart_data/${conId}`);
+                return await response.json();
+            } catch (e) {
+                console.error('Failed to fetch chart data:', e);
+                return [];
+            }
+        }
+
+        async function updateChart(contracts) {
+            const chartEl = document.getElementById('chart');
+            const chartEmpty = document.getElementById('chart-empty');
+            const togglesContainer = document.getElementById('chart-toggles');
+
+            if (!contracts || contracts.length === 0) {
+                chartEl.classList.add('hidden');
+                togglesContainer.innerHTML = '';
+                chartEmpty.classList.remove('hidden');
+                return;
+            }
+
+            chartEl.classList.remove('hidden');
+            chartEmpty.classList.add('hidden');
+
+            // Check if contracts have changed
+            const currentIds = contracts.map(c => c.conId).sort().join(',');
+            const prevIds = chartContracts.map(c => c.conId).sort().join(',');
+
+            if (currentIds !== prevIds) {
+                chartContracts = contracts;
+                initChart();
+
+                // Initialize visibility for new contracts
+                for (const contract of contracts) {
+                    if (!(contract.conId in contractVisibility)) {
+                        contractVisibility[contract.conId] = true;
+                    }
+                }
+
+                // Create series for each contract
+                for (let i = 0; i < contracts.length; i++) {
+                    const contract = contracts[i];
+                    const color = chartColors[i % chartColors.length];
+
+                    const series = chart.addLineSeries({
+                        color: color,
+                        lineWidth: 2,
+                        title: contract.label,
+                        visible: contractVisibility[contract.conId],
+                        priceScaleId: 'right',
+                        lastValueVisible: true,
+                        priceLineVisible: true,
+                    });
+                    chartSeries[contract.conId] = { series, color };
+
+                    // Fetch and set data
+                    const data = await fetchChartData(contract.conId);
+                    if (data.length > 0) {
+                        series.setData(data.map(d => ({ time: d.time, value: d.close })));
+                    }
+                }
+
+                chart.timeScale().fitContent();
+
+                // Render toggles
+                renderChartToggles(contracts);
+            }
+        }
+
+        function renderChartToggles(contracts) {
+            const container = document.getElementById('chart-toggles');
+            container.innerHTML = '';
+
+            for (let i = 0; i < contracts.length; i++) {
+                const contract = contracts[i];
+                const color = chartColors[i % chartColors.length];
+                const isVisible = contractVisibility[contract.conId];
+
+                const toggle = document.createElement('div');
+                toggle.className = 'chart-toggle' + (isVisible ? '' : ' disabled');
+                toggle.innerHTML = `
+                    <span class="chart-toggle-color" style="background-color: ${color}"></span>
+                    <span>${contract.label}</span>
+                `;
+                toggle.onclick = () => toggleContractVisibility(contract.conId);
+                container.appendChild(toggle);
+            }
+        }
+
+        function toggleContractVisibility(conId) {
+            contractVisibility[conId] = !contractVisibility[conId];
+            const seriesInfo = chartSeries[conId];
+            if (seriesInfo) {
+                seriesInfo.series.applyOptions({ visible: contractVisibility[conId] });
+            }
+            renderChartToggles(chartContracts);
+        }
+
+        // Time range dropdown handler
+        document.getElementById('trades-time-range').addEventListener('change', function(e) {
+            currentTradesHours = parseInt(e.target.value);
+            renderTrades(allTrades);
+        });
+
         // Connect to Server-Sent Events for live updates
         const eventSource = new EventSource('/events');
 
         eventSource.onmessage = function(event) {
             const data = JSON.parse(event.data);
             updateStatus(data.state);
+            updateVisibility(data.state);
+            if (data.state !== 'Stopped') {
+                updateChart(data.chart_contracts);
+            }
             renderPositions(data.positions);
             renderOrders(data.orders);
-            renderTrades(data.trades);
+            allTrades = data.trades;
+            renderTrades(allTrades);
             document.getElementById('last-updated').textContent = data.last_updated;
         };
 
         eventSource.onerror = function() {
             console.log('SSE connection lost, will retry...');
         };
+
+        // Initialize chart on page load if not stopped
+        document.addEventListener('DOMContentLoaded', function() {
+            const state = '{{ state }}';
+            if (state !== 'Stopped') {
+                const initialContracts = {{ chart_contracts | tojson | safe }};
+                updateChart(initialContracts);
+            }
+        });
     </script>
 </body>
 </html>
