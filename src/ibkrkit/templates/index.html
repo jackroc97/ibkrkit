@@ -3,185 +3,328 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="refresh" content="5">
     <title>{{ strategy_name }} - Strategy Dashboard</title>
     <style>
+        * {
+            box-sizing: border-box;
+        }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            margin: 20px;
-            background-color: #f5f5f5;
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Mono', 'Menlo', monospace;
+            margin: 0;
+            padding: 16px;
+            background-color: #1a1a1a;
+            color: #e0e0e0;
+            font-size: 14px;
+            line-height: 1.4;
+        }
+        .header {
+            margin-bottom: 16px;
         }
         h1 {
-            margin-bottom: 5px;
+            margin: 0 0 4px 0;
+            font-size: 20px;
+            font-weight: 600;
+            color: #fff;
         }
         .version {
-            color: #666;
-            margin-bottom: 20px;
+            color: #888;
+            font-size: 12px;
+            margin-bottom: 12px;
         }
         .status {
             display: inline-block;
-            padding: 8px 16px;
+            padding: 6px 12px;
             border-radius: 4px;
-            font-weight: bold;
-            margin-bottom: 20px;
+            font-weight: 600;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
         .status-live {
-            background-color: #4CAF50;
-            color: white;
+            background-color: #22c55e;
+            color: #000;
         }
         .status-sleep {
-            background-color: #FFC107;
-            color: black;
+            background-color: #eab308;
+            color: #000;
         }
         .status-stopped {
-            background-color: #f44336;
-            color: white;
+            background-color: #ef4444;
+            color: #fff;
+        }
+        .section {
+            margin-top: 24px;
+        }
+        .section-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+            padding-bottom: 4px;
+            border-bottom: 1px solid #333;
+        }
+        .card {
+            background-color: #252525;
+            border-radius: 8px;
+            overflow: hidden;
         }
         table {
             width: 100%;
             border-collapse: collapse;
-            margin-bottom: 30px;
-            background-color: white;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
         }
-        th, td {
-            border: 1px solid #ddd;
-            padding: 10px;
+        td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #333;
+            vertical-align: middle;
+        }
+        tr:last-child td {
+            border-bottom: none;
+        }
+        .col-qty {
+            width: 50px;
+            text-align: right;
+            font-weight: 600;
+            color: #fff;
+            white-space: nowrap;
+        }
+        .col-desc {
             text-align: left;
+            color: #ccc;
         }
-        th {
-            background-color: #333;
-            color: white;
+        .col-pnl {
+            width: 80px;
+            text-align: right;
+            font-weight: 600;
+            white-space: nowrap;
         }
-        tr:nth-child(even) {
-            background-color: #f9f9f9;
+        .col-price {
+            width: 70px;
+            text-align: right;
+            color: #888;
+            white-space: nowrap;
         }
-        .section-title {
-            margin-top: 30px;
-            margin-bottom: 10px;
-            color: #333;
+        .col-time {
+            width: 50px;
+            text-align: left;
+            color: #666;
+            font-size: 12px;
+        }
+        .col-status {
+            width: 80px;
+            text-align: right;
+            font-size: 11px;
+            text-transform: uppercase;
         }
         .positive {
-            color: #4CAF50;
+            color: #22c55e;
         }
         .negative {
-            color: #f44336;
+            color: #ef4444;
+        }
+        .neutral {
+            color: #888;
         }
         .empty-message {
             color: #666;
             font-style: italic;
-            padding: 20px;
-            background-color: white;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            padding: 16px;
+            text-align: center;
+            background-color: #252525;
+            border-radius: 8px;
+        }
+        .footer {
+            color: #555;
+            font-size: 11px;
+            margin-top: 24px;
+            text-align: center;
+        }
+        .live-indicator {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            background-color: #22c55e;
+            border-radius: 50%;
+            margin-right: 6px;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
         }
     </style>
 </head>
 <body>
-    <h1>{{ strategy_name }}</h1>
-    <div class="version">Version {{ strategy_version }}</div>
+    <div class="header">
+        <h1>{{ strategy_name }}</h1>
+        <div class="version">v{{ strategy_version }}</div>
+        <div id="status" class="status status-{{ state|lower }}">{{ state }}</div>
+    </div>
 
-    <div class="status status-{{ state|lower }}">{{ state }}</div>
+    <div class="section">
+        <div class="section-title">Positions</div>
+        <div id="positions-container">
+            {% if positions %}
+            <div class="card">
+                <table>
+                    <tbody>
+                        {% for pos in positions %}
+                        <tr>
+                            <td class="col-qty">{{ pos.quantity }}x</td>
+                            <td class="col-desc">{{ pos.description }}</td>
+                            <td class="col-pnl {{ 'positive' if pos.pnl >= 0 else 'negative' }}">${{ "%.2f"|format(pos.pnl|abs) if pos.pnl < 0 else "%.2f"|format(pos.pnl) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="empty-message">No open positions</div>
+            {% endif %}
+        </div>
+    </div>
 
-    <h2 class="section-title">Open Positions</h2>
-    {% if positions %}
-    <table>
-        <thead>
-            <tr>
-                <th>Time Opened</th>
-                <th>Symbol</th>
-                <th>Strike</th>
-                <th>Expiration</th>
-                <th>Quantity</th>
-                <th>Avg Cost</th>
-                <th>Current PnL</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for pos in positions %}
-            <tr>
-                <td>{{ pos.time_opened }}</td>
-                <td>{{ pos.symbol }}</td>
-                <td>{{ pos.strike }}</td>
-                <td>{{ pos.expiration }}</td>
-                <td>{{ pos.quantity }}</td>
-                <td>{{ pos.avg_cost }}</td>
-                <td class="{{ 'positive' if pos.pnl >= 0 else 'negative' }}">{{ "%.2f"|format(pos.pnl) }}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-    {% else %}
-    <div class="empty-message">No open positions</div>
-    {% endif %}
+    <div class="section">
+        <div class="section-title">Open Orders</div>
+        <div id="orders-container">
+            {% if orders %}
+            <div class="card">
+                <table>
+                    <tbody>
+                        {% for order in orders %}
+                        <tr>
+                            <td class="col-qty">{{ order.quantity }}x</td>
+                            <td class="col-desc">{{ order.description }}</td>
+                            <td class="col-price">${{ "%.2f"|format(order.limit_price) }}</td>
+                            <td class="col-status neutral">{{ order.status }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="empty-message">No open orders</div>
+            {% endif %}
+        </div>
+    </div>
 
-    <h2 class="section-title">Open Orders</h2>
-    {% if orders %}
-    <table>
-        <thead>
-            <tr>
-                <th>Time Placed</th>
-                <th>Symbol</th>
-                <th>Strike</th>
-                <th>Expiration</th>
-                <th>Action</th>
-                <th>Quantity</th>
-                <th>Limit Price</th>
-                <th>Status</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for order in orders %}
-            <tr>
-                <td>{{ order.time_placed }}</td>
-                <td>{{ order.symbol }}</td>
-                <td>{{ order.strike }}</td>
-                <td>{{ order.expiration }}</td>
-                <td>{{ order.action }}</td>
-                <td>{{ order.quantity }}</td>
-                <td>{{ order.limit_price }}</td>
-                <td>{{ order.status }}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-    {% else %}
-    <div class="empty-message">No open orders</div>
-    {% endif %}
+    <div class="section">
+        <div class="section-title">Recent Trades (48h)</div>
+        <div id="trades-container">
+            {% if trades %}
+            <div class="card">
+                <table>
+                    <tbody>
+                        {% for trade in trades %}
+                        <tr>
+                            <td class="col-time">{{ trade.time_executed }}</td>
+                            <td class="col-qty">{{ trade.quantity }}x</td>
+                            <td class="col-desc">{{ trade.description }}</td>
+                            <td class="col-price">${{ "%.2f"|format(trade.price) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="empty-message">No trades in the past 48 hours</div>
+            {% endif %}
+        </div>
+    </div>
 
-    <h2 class="section-title">Recent Trades (Past 48 Hours)</h2>
-    {% if trades %}
-    <table>
-        <thead>
-            <tr>
-                <th>Time Executed</th>
-                <th>Symbol</th>
-                <th>Strike</th>
-                <th>Expiration</th>
-                <th>Action</th>
-                <th>Quantity</th>
-                <th>Price</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for trade in trades %}
-            <tr>
-                <td>{{ trade.time_executed }}</td>
-                <td>{{ trade.symbol }}</td>
-                <td>{{ trade.strike }}</td>
-                <td>{{ trade.expiration }}</td>
-                <td>{{ trade.action }}</td>
-                <td>{{ trade.quantity }}</td>
-                <td>{{ trade.price }}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-    {% else %}
-    <div class="empty-message">No trades in the past 48 hours</div>
-    {% endif %}
+    <div class="footer">
+        <span class="live-indicator"></span>Live updates | Last: <span id="last-updated">{{ last_updated }}</span>
+    </div>
 
-    <p style="color: #999; font-size: 12px; margin-top: 40px;">
-        Auto-refreshes every 5 seconds | Last updated: {{ last_updated }}
-    </p>
+    <script>
+        function formatPnl(value) {
+            const absVal = Math.abs(value).toFixed(2);
+            const cls = value >= 0 ? 'positive' : 'negative';
+            return `<td class="col-pnl ${cls}">$${absVal}</td>`;
+        }
+
+        function formatPrice(value) {
+            return `<td class="col-price">$${value.toFixed(2)}</td>`;
+        }
+
+        function renderPositions(positions) {
+            const container = document.getElementById('positions-container');
+            if (!positions || positions.length === 0) {
+                container.innerHTML = '<div class="empty-message">No open positions</div>';
+                return;
+            }
+            let html = '<div class="card"><table><tbody>';
+            for (const pos of positions) {
+                html += `<tr>
+                    <td class="col-qty">${pos.quantity}x</td>
+                    <td class="col-desc">${pos.description}</td>
+                    ${formatPnl(pos.pnl)}
+                </tr>`;
+            }
+            html += '</tbody></table></div>';
+            container.innerHTML = html;
+        }
+
+        function renderOrders(orders) {
+            const container = document.getElementById('orders-container');
+            if (!orders || orders.length === 0) {
+                container.innerHTML = '<div class="empty-message">No open orders</div>';
+                return;
+            }
+            let html = '<div class="card"><table><tbody>';
+            for (const order of orders) {
+                html += `<tr>
+                    <td class="col-qty">${order.quantity}x</td>
+                    <td class="col-desc">${order.description}</td>
+                    ${formatPrice(order.limit_price)}
+                    <td class="col-status neutral">${order.status}</td>
+                </tr>`;
+            }
+            html += '</tbody></table></div>';
+            container.innerHTML = html;
+        }
+
+        function renderTrades(trades) {
+            const container = document.getElementById('trades-container');
+            if (!trades || trades.length === 0) {
+                container.innerHTML = '<div class="empty-message">No trades in the past 48 hours</div>';
+                return;
+            }
+            let html = '<div class="card"><table><tbody>';
+            for (const trade of trades) {
+                html += `<tr>
+                    <td class="col-time">${trade.time_executed}</td>
+                    <td class="col-qty">${trade.quantity}x</td>
+                    <td class="col-desc">${trade.description}</td>
+                    ${formatPrice(trade.price)}
+                </tr>`;
+            }
+            html += '</tbody></table></div>';
+            container.innerHTML = html;
+        }
+
+        function updateStatus(state) {
+            const el = document.getElementById('status');
+            el.textContent = state;
+            el.className = 'status status-' + state.toLowerCase();
+        }
+
+        // Connect to Server-Sent Events for live updates
+        const eventSource = new EventSource('/events');
+
+        eventSource.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            updateStatus(data.state);
+            renderPositions(data.positions);
+            renderOrders(data.orders);
+            renderTrades(data.trades);
+            document.getElementById('last-updated').textContent = data.last_updated;
+        };
+
+        eventSource.onerror = function() {
+            console.log('SSE connection lost, will retry...');
+        };
+    </script>
 </body>
 </html>

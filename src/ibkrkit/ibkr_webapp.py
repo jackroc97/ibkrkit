@@ -1,8 +1,11 @@
+import json
 import threading
+import time
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
-from flask import Flask, render_template
+from flask import Flask, render_template, Response
+
 from ib_async import IB, Option, FuturesOption
 
 if TYPE_CHECKING:
@@ -35,6 +38,30 @@ class IbkrWebapp:
                 last_updated=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             )
 
+        @app.route("/events")
+        def events():
+            """Server-Sent Events endpoint for real-time updates."""
+            def generate():
+                while True:
+                    data = {
+                        "state": self._get_state(),
+                        "positions": self._get_positions(),
+                        "orders": self._get_open_orders(),
+                        "trades": self._get_recent_trades(),
+                        "last_updated": datetime.now().strftime("%H:%M:%S"),
+                    }
+                    yield f"data: {json.dumps(data)}\n\n"
+                    time.sleep(2)  # Update every 2 seconds
+
+            return Response(
+                generate(),
+                mimetype="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                }
+            )
+
         return app
 
     def _get_state(self) -> str:
@@ -44,6 +71,24 @@ class IbkrWebapp:
         if self.strategy.is_live:
             return "Live"
         return "Sleep"
+
+    def _format_expiration(self, expiration: str) -> str:
+        """Format expiration date like 'Jan 27' from '20260127' format."""
+        if not expiration:
+            return ""
+        try:
+            dt = datetime.strptime(expiration, "%Y%m%d")
+            return dt.strftime("%b %d")
+        except ValueError:
+            return expiration
+
+    def _format_right(self, right: str) -> str:
+        """Format option right as PUT or CALL."""
+        if right == "P":
+            return "PUT"
+        elif right == "C":
+            return "CALL"
+        return right
 
     def _get_positions(self) -> list[dict]:
         """Get open positions with PnL, grouped by spread."""
@@ -60,20 +105,20 @@ class IbkrWebapp:
             if portfolio_item:
                 pnl = portfolio_item.unrealizedPNL or 0.0
 
-            # Extract option-specific fields
-            strike = ""
-            expiration = ""
+            # Build condensed position description
+            symbol = contract.localSymbol or contract.symbol
             if isinstance(contract, (Option, FuturesOption)):
-                strike = f"{contract.strike}{contract.right}"
-                expiration = contract.lastTradeDateOrContractMonth
+                exp_short = self._format_expiration(contract.lastTradeDateOrContractMonth)
+                strike = int(contract.strike) if contract.strike == int(contract.strike) else contract.strike
+                right = self._format_right(contract.right)
+                description = f"{exp_short} {symbol} {strike} {right}"
+            else:
+                description = symbol
 
+            qty = int(pos.position) if pos.position == int(pos.position) else pos.position
             positions.append({
-                "time_opened": "N/A",  # IBKR doesn't provide this
-                "symbol": contract.symbol or contract.localSymbol,
-                "strike": strike,
-                "expiration": expiration,
-                "quantity": pos.position,
-                "avg_cost": f"{pos.avgCost:.2f}" if pos.avgCost else "N/A",
+                "quantity": qty,
+                "description": description,
                 "pnl": pnl,
             })
 
@@ -87,36 +132,32 @@ class IbkrWebapp:
             contract = trade.contract
             order = trade.order
 
-            # Extract option-specific fields
-            strike = ""
-            expiration = ""
+            # Build condensed order description
+            symbol = contract.localSymbol or contract.symbol
             if isinstance(contract, (Option, FuturesOption)):
-                strike = f"{contract.strike}{contract.right}"
-                expiration = contract.lastTradeDateOrContractMonth
+                exp_short = self._format_expiration(contract.lastTradeDateOrContractMonth)
+                strike = int(contract.strike) if contract.strike == int(contract.strike) else contract.strike
+                right = self._format_right(contract.right)
+                description = f"{exp_short} {symbol} {strike} {right}"
+            else:
+                description = symbol
 
             # Determine limit price
-            limit_price = ""
+            limit_price = 0.0
             if order.lmtPrice:
-                limit_price = f"{order.lmtPrice:.2f}"
+                limit_price = order.lmtPrice
             elif order.auxPrice:
-                limit_price = f"{order.auxPrice:.2f} (stop)"
+                limit_price = order.auxPrice
 
-            # Use log time if available
-            time_placed = "N/A"
-            if trade.log:
-                time_placed = trade.log[0].time.strftime("%Y-%m-%d %H:%M:%S")
+            qty = int(order.totalQuantity) if order.totalQuantity == int(order.totalQuantity) else order.totalQuantity
+            # Prefix with action (BUY/SELL)
+            action_prefix = "+" if order.action == "BUY" else "-"
 
             orders.append({
-                "time_placed": time_placed,
-                "symbol": contract.symbol or contract.localSymbol,
-                "strike": strike,
-                "expiration": expiration,
-                "action": order.action,
-                "quantity": order.totalQuantity,
+                "quantity": f"{action_prefix}{qty}",
+                "description": description,
                 "limit_price": limit_price,
                 "status": trade.orderStatus.status,
-                "oca_group": order.ocaGroup,
-                "parent_id": order.parentId,
             })
 
         return orders
@@ -142,26 +183,33 @@ class IbkrWebapp:
                 contract = fill.contract
                 execution = fill.execution
 
-                # Extract option-specific fields
-                strike = ""
-                expiration = ""
+                # Build condensed trade description
+                symbol = contract.localSymbol or contract.symbol
                 if isinstance(contract, (Option, FuturesOption)):
-                    strike = f"{contract.strike}{contract.right}"
-                    expiration = contract.lastTradeDateOrContractMonth
+                    exp_short = self._format_expiration(contract.lastTradeDateOrContractMonth)
+                    strike = int(contract.strike) if contract.strike == int(contract.strike) else contract.strike
+                    right = self._format_right(contract.right)
+                    description = f"{exp_short} {symbol} {strike} {right}"
+                else:
+                    description = symbol
+
+                qty = int(execution.shares) if execution.shares == int(execution.shares) else execution.shares
+                # Prefix with action (BOT/SLD shown as +/-)
+                action_prefix = "+" if execution.side == "BOT" else "-"
+
+                # Format time as just time portion for recent trades
+                time_str = fill.time.strftime("%H:%M")
 
                 trades.append({
-                    "time_executed": fill.time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "symbol": contract.symbol or contract.localSymbol,
-                    "strike": strike,
-                    "expiration": expiration,
-                    "action": execution.side,
-                    "quantity": execution.shares,
-                    "price": f"{execution.price:.2f}",
-                    "oca_group": trade.order.ocaGroup if trade.order else "",
+                    "time_executed": time_str,
+                    "time_sort": fill.time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "quantity": f"{action_prefix}{qty}",
+                    "description": description,
+                    "price": execution.price,
                 })
 
         # Sort by time, most recent first
-        trades.sort(key=lambda x: x["time_executed"], reverse=True)
+        trades.sort(key=lambda x: x["time_sort"], reverse=True)
         return trades
 
     def start(self, port: int = 5000) -> None:
@@ -170,7 +218,7 @@ class IbkrWebapp:
             self._app.run(
                 host="0.0.0.0",
                 port=port,
-                threaded=False,
+                threaded=True,  # Enable threading for SSE support
                 use_reloader=False,
                 debug=False,
             )
