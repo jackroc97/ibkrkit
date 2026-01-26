@@ -106,13 +106,15 @@ class IbkrWebapp:
                 pnl = portfolio_item.unrealizedPNL or 0.0
 
             # Build condensed position description
-            symbol = contract.localSymbol or contract.symbol
+            # For options, use the underlying symbol to avoid duplicating strike/right
             if isinstance(contract, (Option, FuturesOption)):
+                symbol = contract.symbol
                 exp_short = self._format_expiration(contract.lastTradeDateOrContractMonth)
                 strike = int(contract.strike) if contract.strike == int(contract.strike) else contract.strike
                 right = self._format_right(contract.right)
                 description = f"{exp_short} {symbol} {strike} {right}"
             else:
+                symbol = contract.localSymbol or contract.symbol
                 description = symbol
 
             qty = int(pos.position) if pos.position == int(pos.position) else pos.position
@@ -133,13 +135,15 @@ class IbkrWebapp:
             order = trade.order
 
             # Build condensed order description
-            symbol = contract.localSymbol or contract.symbol
+            # For options, use the underlying symbol to avoid duplicating strike/right
             if isinstance(contract, (Option, FuturesOption)):
+                symbol = contract.symbol
                 exp_short = self._format_expiration(contract.lastTradeDateOrContractMonth)
                 strike = int(contract.strike) if contract.strike == int(contract.strike) else contract.strike
                 right = self._format_right(contract.right)
                 description = f"{exp_short} {symbol} {strike} {right}"
             else:
+                symbol = contract.localSymbol or contract.symbol
                 description = symbol
 
             # Determine limit price
@@ -184,13 +188,15 @@ class IbkrWebapp:
                 execution = fill.execution
 
                 # Build condensed trade description
-                symbol = contract.localSymbol or contract.symbol
+                # For options, use the underlying symbol to avoid duplicating strike/right
                 if isinstance(contract, (Option, FuturesOption)):
+                    symbol = contract.symbol
                     exp_short = self._format_expiration(contract.lastTradeDateOrContractMonth)
                     strike = int(contract.strike) if contract.strike == int(contract.strike) else contract.strike
                     right = self._format_right(contract.right)
                     description = f"{exp_short} {symbol} {strike} {right}"
                 else:
+                    symbol = contract.localSymbol or contract.symbol
                     description = symbol
 
                 qty = int(execution.shares) if execution.shares == int(execution.shares) else execution.shares

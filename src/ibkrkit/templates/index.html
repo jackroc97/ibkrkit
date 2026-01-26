@@ -117,6 +117,27 @@
             font-size: 11px;
             text-transform: uppercase;
         }
+        th {
+            padding: 6px 12px;
+            font-size: 10px;
+            font-weight: 500;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            border-bottom: 1px solid #333;
+        }
+        th.col-qty {
+            text-align: right;
+        }
+        th.col-desc {
+            text-align: left;
+        }
+        th.col-pnl, th.col-price, th.col-status {
+            text-align: right;
+        }
+        th.col-time {
+            text-align: left;
+        }
         .positive {
             color: #22c55e;
         }
@@ -168,6 +189,13 @@
             {% if positions %}
             <div class="card">
                 <table>
+                    <thead>
+                        <tr>
+                            <th class="col-qty">Qty</th>
+                            <th class="col-desc">Instrument</th>
+                            <th class="col-pnl">PnL</th>
+                        </tr>
+                    </thead>
                     <tbody>
                         {% for pos in positions %}
                         <tr>
@@ -191,6 +219,14 @@
             {% if orders %}
             <div class="card">
                 <table>
+                    <thead>
+                        <tr>
+                            <th class="col-qty">Qty</th>
+                            <th class="col-desc">Instrument</th>
+                            <th class="col-price">Lmt</th>
+                            <th class="col-status">Status</th>
+                        </tr>
+                    </thead>
                     <tbody>
                         {% for order in orders %}
                         <tr>
@@ -215,6 +251,14 @@
             {% if trades %}
             <div class="card">
                 <table>
+                    <thead>
+                        <tr>
+                            <th class="col-time">Time</th>
+                            <th class="col-qty">Qty</th>
+                            <th class="col-desc">Instrument</th>
+                            <th class="col-price">Price</th>
+                        </tr>
+                    </thead>
                     <tbody>
                         {% for trade in trades %}
                         <tr>
@@ -254,7 +298,11 @@
                 container.innerHTML = '<div class="empty-message">No open positions</div>';
                 return;
             }
-            let html = '<div class="card"><table><tbody>';
+            let html = '<div class="card"><table><thead><tr>';
+            html += '<th class="col-qty">Qty</th>';
+            html += '<th class="col-desc">Instrument</th>';
+            html += '<th class="col-pnl">PnL</th>';
+            html += '</tr></thead><tbody>';
             for (const pos of positions) {
                 html += `<tr>
                     <td class="col-qty">${pos.quantity}x</td>
@@ -272,7 +320,12 @@
                 container.innerHTML = '<div class="empty-message">No open orders</div>';
                 return;
             }
-            let html = '<div class="card"><table><tbody>';
+            let html = '<div class="card"><table><thead><tr>';
+            html += '<th class="col-qty">Qty</th>';
+            html += '<th class="col-desc">Instrument</th>';
+            html += '<th class="col-price">Lmt</th>';
+            html += '<th class="col-status">Status</th>';
+            html += '</tr></thead><tbody>';
             for (const order of orders) {
                 html += `<tr>
                     <td class="col-qty">${order.quantity}x</td>
@@ -291,7 +344,12 @@
                 container.innerHTML = '<div class="empty-message">No trades in the past 48 hours</div>';
                 return;
             }
-            let html = '<div class="card"><table><tbody>';
+            let html = '<div class="card"><table><thead><tr>';
+            html += '<th class="col-time">Time</th>';
+            html += '<th class="col-qty">Qty</th>';
+            html += '<th class="col-desc">Instrument</th>';
+            html += '<th class="col-price">Price</th>';
+            html += '</tr></thead><tbody>';
             for (const trade of trades) {
                 html += `<tr>
                     <td class="col-time">${trade.time_executed}</td>
