@@ -45,12 +45,16 @@ class IbkrStrategy:
         day_start_time: Optional[time] = None,
         day_stop_time: Optional[time] = None,
         tick_freq_seconds: int = 5,
-        weekday_only: bool = True
+        weekday_only: bool = True,
+        webapp: bool = False,
+        webapp_port: int = 5000
     ):
         self._day_start_time = day_start_time
         self._day_stop_time = day_stop_time
         self._tick_freq_seconds = tick_freq_seconds
         self._weekday_only = weekday_only
+        self._webapp_enabled = webapp
+        self._webapp_port = webapp_port
         nest_asyncio.apply()
         asyncio.run(self._run(host, port, client_id, account_id=account_id))
 
@@ -60,6 +64,12 @@ class IbkrStrategy:
         self.ib.connect(host=host, port=port, clientId=client_id, account=account_id)
 
         self.now = datetime.now()
+
+        # Start webapp if enabled
+        if self._webapp_enabled:
+            from .ibkr_webapp import IbkrWebapp
+            self._webapp = IbkrWebapp(self.ib, self)
+            self._webapp.start(port=self._webapp_port)
 
         try:
             await self._call_strategy_init()
