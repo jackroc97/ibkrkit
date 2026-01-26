@@ -1,3 +1,4 @@
+import asyncio
 import json
 import threading
 import time
@@ -21,6 +22,7 @@ class IbkrWebapp:
         self._app = self._create_app()
         self._thread = None
         self._contract_cache = {}  # conId -> contract for underlying lookups
+        self._loop = None  # Store reference to the main event loop
 
     def _create_app(self) -> Flask:
         """Create and configure the Flask application."""
@@ -258,7 +260,7 @@ class IbkrWebapp:
             if isinstance(contract, Option):
                 # Create underlying stock contract
                 underlying = Stock(contract.symbol, "SMART", contract.currency)
-                qualified = self.ib.qualifyContracts(underlying)
+                qualified = self._run_async(self.ib.qualifyContractsAsync(underlying))
                 if qualified:
                     underlying = qualified[0]
                     if underlying.conId not in seen_con_ids:
@@ -277,7 +279,7 @@ class IbkrWebapp:
                     exchange=contract.exchange,
                     currency=contract.currency,
                 )
-                qualified = self.ib.qualifyContracts(underlying)
+                qualified = self._run_async(self.ib.qualifyContractsAsync(underlying))
                 if qualified:
                     underlying = qualified[0]
                     if underlying.conId not in seen_con_ids:
@@ -305,7 +307,7 @@ class IbkrWebapp:
             return []
 
         try:
-            bars = self.ib.reqHistoricalData(
+            bars = self._run_async(self.ib.reqHistoricalDataAsync(
                 contract,
                 endDateTime="",
                 durationStr="1 D",
@@ -313,7 +315,10 @@ class IbkrWebapp:
                 whatToShow="TRADES",
                 useRTH=False,
                 formatDate=1,
-            )
+            ))
+
+            if not bars:
+                return []
 
             return [
                 {
@@ -328,8 +333,24 @@ class IbkrWebapp:
         except Exception:
             return []
 
+    def _run_async(self, coro):
+        """Run an async coroutine from the Flask thread safely."""
+        if self._loop is None:
+            return None
+        try:
+            future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+            return future.result(timeout=5.0)
+        except Exception:
+            return None
+
     def start(self, port: int = 5000) -> None:
         """Start the Flask webapp in a daemon thread."""
+        # Capture the current event loop for async calls from Flask thread
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = asyncio.get_event_loop()
+
         def run_flask():
             self._app.run(
                 host="0.0.0.0",
