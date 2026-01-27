@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from flask import Flask, render_template, Response, jsonify
 
-from ib_async import IB, Option, FuturesOption, Bag, Contract
+from ib_async import IB, Option, FuturesOption, Future, Bag, Contract, ContractDetails
 
 if TYPE_CHECKING:
     from .ibkr_strategy import IbkrStrategy
@@ -82,6 +82,15 @@ class IbkrWebapp:
         self._running = False
         self._app = self._create_app()
 
+        # Bar data for charting (thread-safe access required)
+        self._bar_data_lock = threading.Lock()
+        self._bar_data: dict[int, list[dict]] = {}  # conId -> list of OHLC bars
+        self._bar_subscriptions: dict[int, Any] = {}  # conId -> BarDataList from reqHistoricalData
+        self._bar_aggregation: dict[int, dict] = {}  # conId -> current minute aggregation state
+
+        # Breakeven data for chart price lines (thread-safe access required)
+        self._breakevens: dict[int, list[dict]] = {}  # underlying conId -> list of breakeven info
+
     def _create_app(self) -> Flask:
         """Create and configure the Flask application."""
         app = Flask(__name__, template_folder="templates")
@@ -90,7 +99,7 @@ class IbkrWebapp:
         def index():
             snapshot = self._data_store.get_snapshot()
             return render_template(
-                "new_index.html",
+                "index.html",
                 strategy_name=getattr(self.strategy, "name", "Unknown Strategy"),
                 strategy_version=getattr(self.strategy, "version", "0.0.0"),
                 state=snapshot["state"],
@@ -122,8 +131,15 @@ class IbkrWebapp:
 
         @app.route("/chart_data/<int:con_id>")
         def chart_data(con_id):
-            """Get historical price data for a contract."""
-            data = self._get_historical_data(con_id)
+            """Get bar data for a contract from the live stream."""
+            data = self._get_bar_data(con_id)
+            return jsonify(data)
+
+        @app.route("/breakevens/<int:underlying_con_id>")
+        def breakevens(underlying_con_id):
+            """Get breakeven price lines for an underlying contract."""
+            with self._bar_data_lock:
+                data = list(self._breakevens.get(underlying_con_id, []))
             return jsonify(data)
 
         return app
@@ -142,7 +158,10 @@ class IbkrWebapp:
         positions = await self._collect_positions()
         orders = await self._collect_orders()
         trades = await self._collect_trades()
-        chart_contracts = self._collect_chart_contracts()
+        chart_contracts = await self._collect_chart_contracts_and_update_streams()
+
+        # Calculate breakevens for options positions (for chart price lines)
+        await self._collect_breakevens()
 
         self._data_store.update(state, positions, orders, trades, chart_contracts)
 
@@ -192,6 +211,285 @@ class IbkrWebapp:
 
         return contract.symbol
 
+    def _format_contract_month(self, contract_month: str) -> str:
+        """Format contract month from YYYYMM to 'Month Year' format.
+
+        Example: '202603' -> 'March 2026'
+        """
+        if not contract_month or len(contract_month) < 6:
+            return contract_month or ""
+        try:
+            dt = datetime.strptime(contract_month[:6], "%Y%m")
+            return dt.strftime("%B %Y")
+        except ValueError:
+            return contract_month
+
+    async def _format_underlying_label(self, contract: Contract) -> str:
+        """Format a label for an underlying contract (futures, stocks, etc.).
+
+        For futures: <localSymbol> <longName> <contractMonth>
+        Where contractMonth is formatted as full month name + year.
+        """
+        try:
+            details_list = await self.ib.reqContractDetailsAsync(contract)
+            if details_list:
+                details = details_list[0]
+                local_symbol = details.contract.localSymbol or contract.localSymbol or contract.symbol
+                long_name = details.longName or ""
+                contract_month = details.contractMonth or ""
+
+                if contract_month:
+                    formatted_month = self._format_contract_month(contract_month)
+                    return f"{local_symbol} {long_name} {formatted_month}".strip()
+                elif long_name:
+                    return f"{local_symbol} {long_name}".strip()
+                else:
+                    return local_symbol
+        except Exception:
+            pass
+
+        return contract.localSymbol or contract.symbol
+
+    async def _get_underlying_contract(self, contract: Contract) -> Contract | None:
+        """Get the underlying contract for an option/futures option.
+
+        Returns the qualified underlying contract, or None if not found.
+        """
+        if not isinstance(contract, (Option, FuturesOption)):
+            return None
+
+        try:
+            details_list = await self.ib.reqContractDetailsAsync(contract)
+            if not details_list:
+                return None
+
+            details = details_list[0]
+            under_con_id = details.underConId
+
+            if not under_con_id:
+                return None
+
+            # Create and qualify the underlying contract
+            if isinstance(contract, FuturesOption):
+                # Underlying is a Future
+                under_contract = Future(conId=under_con_id)
+            else:
+                # Underlying is typically Stock or Index
+                under_contract = Contract(conId=under_con_id)
+
+            qualified = await self.ib.qualifyContractsAsync(under_contract)
+            if qualified:
+                return qualified[0]
+
+        except Exception as e:
+            print(f"[Chart] Error getting underlying for {contract.localSymbol}: {e}")
+
+        return None
+
+    def _calculate_breakevens(self, options: list[dict]) -> list[dict]:
+        """Calculate breakeven prices for a group of options (same underlying, same expiration).
+
+        Args:
+            options: List of dicts with keys: strike, right ('C'/'P'), quantity, avg_cost,
+                     expiration, description
+
+        Returns:
+            List of breakeven dicts with keys: price, label, contracts
+        """
+        if not options:
+            return []
+
+        calls = [o for o in options if o['right'] == 'C']
+        puts = [o for o in options if o['right'] == 'P']
+
+        # Calculate premiums (positive = debit/paid, negative = credit/received)
+        total_premium = sum(o['quantity'] * o['avg_cost'] for o in options)
+        call_premium = sum(o['quantity'] * o['avg_cost'] for o in calls)
+        put_premium = sum(o['quantity'] * o['avg_cost'] for o in puts)
+
+        # Check if we have mixed long/short within calls or puts
+        call_has_long = any(o['quantity'] > 0 for o in calls)
+        call_has_short = any(o['quantity'] < 0 for o in calls)
+        put_has_long = any(o['quantity'] > 0 for o in puts)
+        put_has_short = any(o['quantity'] < 0 for o in puts)
+
+        breakevens = []
+
+        def format_exp_compact(expiration: str) -> str:
+            """Format expiration as '27JAN' from '20260127'."""
+            if not expiration or len(expiration) < 8:
+                return expiration or ""
+            try:
+                dt = datetime.strptime(expiration, "%Y%m%d")
+                return dt.strftime("%d%b").upper()  # e.g., "27JAN"
+            except ValueError:
+                return expiration
+
+        def make_label(contracts: list[dict], is_call_based: bool, premium: float) -> str:
+            """Build label like '▲ -1x27JAN6900P/1x27JAN6850P ▲'.
+
+            Args:
+                contracts: List of option dicts with quantity, expiration, strike, right
+                is_call_based: True if this BE is from calls, False if from puts
+                premium: The net premium (positive = debit, negative = credit)
+            """
+            # Determine arrow direction based on option type and premium
+            # Call-based BE: debit (paid) means profit above BE (▲), credit means profit below (▼)
+            # Put-based BE: debit (paid) means profit below BE (▼), credit means profit above (▲)
+            if is_call_based:
+                arrow = "▲" if premium > 0 else "▼"
+            else:
+                arrow = "▼" if premium > 0 else "▲"
+
+            # Sort contracts by decreasing strike
+            sorted_contracts = sorted(contracts, key=lambda c: c['strike'], reverse=True)
+
+            # Format each contract as qty x date month strike right
+            parts = []
+            for c in sorted_contracts:
+                qty = int(c['quantity']) if c['quantity'] == int(c['quantity']) else c['quantity']
+                exp_compact = format_exp_compact(c['expiration'])
+                strike = int(c['strike']) if c['strike'] == int(c['strike']) else c['strike']
+                right_short = c['right']
+                parts.append(f"{qty}x{exp_compact}{strike}{right_short}")
+
+            return f"{arrow} {'/'.join(parts)} {arrow}"
+
+        if calls and puts:
+            # Mixed position - could be straddle/strangle or iron condor
+            calls_same_dir = call_has_long != call_has_short  # XOR - all long or all short
+            puts_same_dir = put_has_long != put_has_short
+
+            if calls_same_dir and puts_same_dir:
+                # Straddle/strangle type - use total premium for both BEs
+                # Upper BE from calls
+                call_strike = min(o['strike'] for o in calls)
+                breakevens.append({
+                    'price': call_strike + abs(total_premium),
+                    'label': make_label(calls, is_call_based=True, premium=total_premium),
+                })
+                # Lower BE from puts
+                put_strike = max(o['strike'] for o in puts)
+                breakevens.append({
+                    'price': put_strike - abs(total_premium),
+                    'label': make_label(puts, is_call_based=False, premium=total_premium),
+                })
+            else:
+                # Iron condor type - calculate per side
+                if calls:
+                    if call_has_short:
+                        call_anchor = min(o['strike'] for o in calls if o['quantity'] < 0)
+                    else:
+                        call_anchor = min(o['strike'] for o in calls)
+                    breakevens.append({
+                        'price': call_anchor + abs(call_premium),
+                        'label': make_label(calls, is_call_based=True, premium=call_premium),
+                    })
+                if puts:
+                    if put_has_short:
+                        put_anchor = max(o['strike'] for o in puts if o['quantity'] < 0)
+                    else:
+                        put_anchor = max(o['strike'] for o in puts)
+                    breakevens.append({
+                        'price': put_anchor - abs(put_premium),
+                        'label': make_label(puts, is_call_based=False, premium=put_premium),
+                    })
+
+        elif calls:
+            # Call spread only
+            if call_has_long:
+                anchor = min(o['strike'] for o in calls if o['quantity'] > 0)
+            else:
+                anchor = min(o['strike'] for o in calls)
+            breakevens.append({
+                'price': anchor + call_premium,
+                'label': make_label(calls, is_call_based=True, premium=call_premium),
+            })
+
+        elif puts:
+            # Put spread only
+            if put_has_long:
+                anchor = max(o['strike'] for o in puts if o['quantity'] > 0)
+            else:
+                anchor = max(o['strike'] for o in puts)
+            breakevens.append({
+                'price': anchor - put_premium,
+                'label': make_label(puts, is_call_based=False, premium=put_premium),
+            })
+
+        return breakevens
+
+    async def _collect_breakevens(self) -> None:
+        """Collect and calculate breakevens for all options positions.
+
+        Groups options by underlying conId and expiration, calculates breakevens,
+        and stores them keyed by underlying conId.
+        """
+        # Group options positions by underlying conId and expiration
+        # Structure: {underlying_conId: {expiration: [option_info, ...]}}
+        options_by_underlying: dict[int, dict[str, list[dict]]] = {}
+
+        try:
+            portfolio_items = {p.contract.conId: p for p in self.ib.portfolio()}
+
+            for pos in self.ib.positions():
+                contract = pos.contract
+                if not isinstance(contract, (Option, FuturesOption)):
+                    continue
+
+                # Get underlying conId
+                underlying = await self._get_underlying_contract(contract)
+                if not underlying or not underlying.conId:
+                    continue
+
+                under_con_id = underlying.conId
+                expiration = contract.lastTradeDateOrContractMonth
+
+                # Get avg_cost from portfolio
+                portfolio_item = portfolio_items.get(contract.conId)
+                avg_cost = 0.0
+                if portfolio_item:
+                    avg_cost = portfolio_item.averageCost or 0.0
+                    # Divide out multiplier for consistency
+                    if contract.multiplier:
+                        multiplier = float(contract.multiplier)
+                        if multiplier > 0:
+                            avg_cost = avg_cost / multiplier
+
+                option_info = {
+                    'strike': contract.strike,
+                    'right': contract.right,
+                    'quantity': pos.position,
+                    'avg_cost': avg_cost,
+                    'expiration': expiration,
+                    'description': contract.localSymbol or f"{contract.symbol} {expiration} {contract.strike} {contract.right}",
+                }
+
+                if under_con_id not in options_by_underlying:
+                    options_by_underlying[under_con_id] = {}
+                if expiration not in options_by_underlying[under_con_id]:
+                    options_by_underlying[under_con_id][expiration] = []
+                options_by_underlying[under_con_id][expiration].append(option_info)
+
+            # Calculate breakevens for each underlying
+            new_breakevens: dict[int, list[dict]] = {}
+            for under_con_id, expirations in options_by_underlying.items():
+                underlying_breakevens = []
+                for expiration, options in expirations.items():
+                    bes = self._calculate_breakevens(options)
+                    underlying_breakevens.extend(bes)
+                if underlying_breakevens:
+                    new_breakevens[under_con_id] = underlying_breakevens
+
+            # Update thread-safe storage
+            with self._bar_data_lock:
+                self._breakevens = new_breakevens
+
+        except Exception as e:
+            import traceback
+            print(f"[Breakevens] Error collecting breakevens: {e}")
+            traceback.print_exc()
+
     async def _collect_positions(self) -> list[dict]:
         """Collect open positions with PnL and entry price."""
         positions = []
@@ -209,6 +507,11 @@ class IbkrWebapp:
                 if portfolio_item:
                     pnl = portfolio_item.unrealizedPNL or 0.0
                     avg_cost = portfolio_item.averageCost or 0.0
+                    # For options, avg_cost includes the multiplier - divide it out for consistency
+                    if isinstance(contract, (Option, FuturesOption)) and contract.multiplier:
+                        multiplier = float(contract.multiplier)
+                        if multiplier > 0:
+                            avg_cost = avg_cost / multiplier
 
                 # Build condensed position description
                 if isinstance(contract, (Option, FuturesOption)):
@@ -264,11 +567,55 @@ class IbkrWebapp:
         }
         return abbreviations.get(status, status[:4].upper() if status else "")
 
+    def _get_order_action(self, order_side: str, position_qty: float) -> str:
+        """Determine order action (BTO/STO/BTC/STC) based on order side and current position.
+
+        Args:
+            order_side: "BUY" or "SELL"
+            position_qty: Current position quantity (positive=long, negative=short, 0=flat)
+
+        Returns:
+            Action string: BTO, STO, BTC, or STC
+        """
+        if order_side == "BUY":
+            # Buying: if we're short, this closes; otherwise it opens
+            return "BTC" if position_qty < 0 else "BTO"
+        else:
+            # Selling: if we're long, this closes; otherwise it opens
+            return "STC" if position_qty > 0 else "STO"
+
     async def _collect_orders(self) -> list[dict]:
         """Collect open orders with combo legs grouped together."""
         orders = []
         try:
-            for trade in self.ib.openTrades():
+            # Build position map: conId -> position quantity
+            position_map: dict[int, float] = {}
+            for pos in self.ib.positions():
+                if pos.contract.conId:
+                    position_map[pos.contract.conId] = pos.position
+
+            # Request all open orders from all clientIds (not just this connection)
+            await self.ib.reqAllOpenOrdersAsync()
+            open_trades = self.ib.openTrades()
+
+            # Filter to only include truly open orders (not filled, cancelled, etc.)
+            active_statuses = {"Submitted", "PreSubmitted", "PendingSubmit", "ApiPending"}
+            for trade in open_trades:
+                status = trade.orderStatus.status
+                remaining = trade.orderStatus.remaining
+
+                # Skip if status is not active
+                if status not in active_statuses:
+                    continue
+
+                # Skip if order has no remaining quantity (fully filled)
+                if remaining is not None and remaining == 0:
+                    continue
+
+                # Use ib_async's isActive() method if available as additional check
+                if hasattr(trade, 'isActive') and callable(trade.isActive):
+                    if not trade.isActive():
+                        continue
                 contract = trade.contract
                 order = trade.order
 
@@ -284,13 +631,17 @@ class IbkrWebapp:
 
                     legs = []
                     for leg in contract.comboLegs:
-                        # Determine leg action prefix
-                        # BTO = Buy to Open, STO = Sell to Open
-                        # BTC = Buy to Close, STC = Sell to Close
+                        # Determine the effective side for this leg
+                        # order.action is the overall combo action, leg.action modifies it
                         if order.action == "BUY":
-                            leg_action = "BTO" if leg.action == "BUY" else "STO"
+                            leg_side = leg.action  # "BUY" or "SELL"
                         else:
-                            leg_action = "BTC" if leg.action == "BUY" else "STC"
+                            # Combo is SELL, so invert the leg action
+                            leg_side = "SELL" if leg.action == "BUY" else "BUY"
+
+                        # Look up position for this leg's contract
+                        leg_position = position_map.get(leg.conId, 0)
+                        leg_action = self._get_order_action(leg_side, leg_position)
 
                         leg_qty = leg.ratio
                         leg_desc = await self._format_contract_from_conid(leg.conId)
@@ -323,9 +674,9 @@ class IbkrWebapp:
                     limit_price = order.lmtPrice if order.lmtPrice else (order.auxPrice or 0.0)
                     qty = int(order.totalQuantity) if order.totalQuantity == int(order.totalQuantity) else order.totalQuantity
 
-                    # Determine action: BTO/STO for opening, BTC/STC for closing
-                    # For simplicity, use BTO for buys and STO for sells
-                    action = "BTO" if order.action == "BUY" else "STO"
+                    # Determine action based on current position
+                    position_qty = position_map.get(contract.conId, 0)
+                    action = self._get_order_action(order.action, position_qty)
                     is_credit = order.action == "SELL"
 
                     orders.append({
@@ -339,8 +690,10 @@ class IbkrWebapp:
                         "status": self._abbreviate_status(trade.orderStatus.status),
                         "is_combo": False,
                     })
-        except Exception:
-            pass  # Return empty list on error
+        except Exception as e:
+            import traceback
+            print(f"[ERROR] _collect_orders exception: {e}")
+            traceback.print_exc()
 
         return orders
 
@@ -380,10 +733,18 @@ class IbkrWebapp:
 
                 legs = []
                 total_credit = 0.0  # Track net credit/debit
+                total_realized_pnl = 0.0  # Sum of realized PnL across all legs
+                is_expiration_trade = False  # Track if any leg is an expiration
 
                 for fill in fills:
                     fill_contract = fill.contract
                     execution = fill.execution
+                    commission_report = fill.commissionReport
+
+                    # Skip Bag (combo) fills - these are summaries, not real executions
+                    # The actual legs are reported as separate fills
+                    if isinstance(fill_contract, Bag):
+                        continue
 
                     # Cache fill contract
                     if fill_contract.conId:
@@ -401,8 +762,30 @@ class IbkrWebapp:
                         description = symbol
 
                     qty = int(execution.shares) if execution.shares == int(execution.shares) else execution.shares
-                    # Determine action: STO for sells, BTO for buys
-                    action = "STO" if execution.side == "SLD" else "BTO"
+
+                    # Get realized PnL from commission report
+                    # realizedPNL = 0 means opening trade, != 0 means closing trade
+                    realized_pnl = 0.0
+                    if commission_report and commission_report.realizedPNL:
+                        # IB uses a large number (1.7976931348623157e+308) to indicate "no value"
+                        if commission_report.realizedPNL < 1e300:
+                            realized_pnl = commission_report.realizedPNL
+
+                    # Check for expiration event: clientId 0 and price 0 indicates
+                    # options held into expiration (system-generated, not a real trade)
+                    is_expiration = execution.clientId == 0 and execution.price == 0
+
+                    # Determine action based on expiration or realized PnL
+                    if is_expiration:
+                        action = "EXP"
+                        is_expiration_trade = True
+                    else:
+                        # If realizedPNL != 0, this is a closing trade
+                        is_closing = realized_pnl != 0
+                        if execution.side == "SLD":
+                            action = "STC" if is_closing else "STO"
+                        else:
+                            action = "BTC" if is_closing else "BTO"
 
                     # Track credit/debit: sells are credits, buys are debits
                     fill_value = execution.price * qty
@@ -410,6 +793,9 @@ class IbkrWebapp:
                         total_credit += fill_value
                     else:
                         total_credit -= fill_value
+
+                    # Accumulate realized PnL for the spread
+                    total_realized_pnl += realized_pnl
 
                     legs.append({
                         "action": action,
@@ -419,54 +805,385 @@ class IbkrWebapp:
 
                 # Determine if overall trade was a credit or debit
                 is_credit = total_credit > 0
-                fill_price = abs(total_credit) / max(sum(leg["quantity"] for leg in legs), 1)
+                # For spreads, divide by one leg's quantity (not sum of all legs)
+                # This gives the per-spread price rather than averaging across legs
+                qty_divisor = legs[0]["quantity"] if legs else 1
+                fill_price = abs(total_credit) / max(qty_divisor, 1)
+
+                # PnL: None if opening trade (total = 0), otherwise show the realized PnL
+                pnl = total_realized_pnl if total_realized_pnl != 0 else None
 
                 trades.append({
                     "time_sort": time_str,
                     "legs": legs,
                     "fill_price": fill_price,
                     "is_credit": is_credit,
-                    "pnl": None,  # "Open" - we don't track realized PnL yet
+                    "pnl": pnl,
                     "is_combo": len(legs) > 1,
+                    "is_expiration": is_expiration_trade,
                 })
-        except Exception:
-            pass  # Return empty list on error
+        except Exception as e:
+            import traceback
+            print(f"[ERROR] _collect_trades exception: {e}")
+            traceback.print_exc()
 
         trades.sort(key=lambda x: x["time_sort"], reverse=True)
         return trades
 
-    def _collect_chart_contracts(self) -> list[dict]:
-        """Collect contracts for charting from open positions."""
-        contracts = []
-        seen_con_ids = set()
+    async def _collect_chart_contracts_and_update_streams(self) -> list[dict]:
+        """Collect contracts for charting and manage bar data streams.
+
+        Collects contracts from positions and open orders.
+        For options/futures options, also includes the underlying.
+        Starts streams for new contracts, stops streams for removed ones.
+        """
+        chart_contracts: list[dict] = []
+        needed_con_ids: set[int] = set()
+        contracts_to_stream: dict[int, Contract] = {}  # conId -> Contract
 
         try:
+            # Collect contracts from positions
             for pos in self.ib.positions():
                 contract = pos.contract
-                if contract.conId in seen_con_ids:
+                if not contract.conId:
                     continue
-                seen_con_ids.add(contract.conId)
-                self._contract_cache[contract.conId] = contract
 
+                self._contract_cache[contract.conId] = contract
+                needed_con_ids.add(contract.conId)
+                contracts_to_stream[contract.conId] = contract
+
+                # For options, also need the underlying
                 if isinstance(contract, (Option, FuturesOption)):
+                    underlying = await self._get_underlying_contract(contract)
+                    if underlying and underlying.conId:
+                        self._contract_cache[underlying.conId] = underlying
+                        needed_con_ids.add(underlying.conId)
+                        contracts_to_stream[underlying.conId] = underlying
+
+            # Collect contracts from open orders
+            for trade in self.ib.openTrades():
+                contract = trade.contract
+                if not contract.conId:
+                    continue
+
+                # Skip Bag contracts - we handle their legs separately
+                if isinstance(contract, Bag):
+                    # Process combo legs
+                    if contract.comboLegs:
+                        for leg in contract.comboLegs:
+                            leg_contract = self._contract_cache.get(leg.conId)
+                            if leg_contract:
+                                needed_con_ids.add(leg.conId)
+                                contracts_to_stream[leg.conId] = leg_contract
+                else:
+                    self._contract_cache[contract.conId] = contract
+                    needed_con_ids.add(contract.conId)
+                    contracts_to_stream[contract.conId] = contract
+
+                    # For options, also need the underlying
+                    if isinstance(contract, (Option, FuturesOption)):
+                        underlying = await self._get_underlying_contract(contract)
+                        if underlying and underlying.conId:
+                            self._contract_cache[underlying.conId] = underlying
+                            needed_con_ids.add(underlying.conId)
+                            contracts_to_stream[underlying.conId] = underlying
+
+            # Start streams for new contracts
+            for con_id, contract in contracts_to_stream.items():
+                if con_id not in self._bar_subscriptions:
+                    await self._start_bar_stream(contract)
+
+            # Stop streams for contracts no longer needed
+            for con_id in list(self._bar_subscriptions.keys()):
+                if con_id not in needed_con_ids:
+                    self._stop_bar_stream(con_id)
+
+            # Build chart contracts list for frontend (underlyings first)
+            underlyings = []
+            options = []
+            for con_id, contract in contracts_to_stream.items():
+                is_option = isinstance(contract, (Option, FuturesOption))
+                if is_option:
+                    # Format options same as elsewhere: short date, full underlying, strike, right
+                    under_symbol = await self._get_under_symbol(contract)
                     exp_short = self._format_expiration(contract.lastTradeDateOrContractMonth)
                     strike = int(contract.strike) if contract.strike == int(contract.strike) else contract.strike
                     right = self._format_right(contract.right)
-                    label = f"{contract.symbol} {exp_short} {strike} {right}"
+                    label = f"{exp_short} {under_symbol} {strike} {right}"
+                    options.append({
+                        "conId": con_id,
+                        "label": label,
+                        "isUnderlying": False,
+                    })
                 else:
-                    label = contract.localSymbol or contract.symbol
+                    # Format underlyings: localSymbol longName contractMonth
+                    label = await self._format_underlying_label(contract)
+                    underlyings.append({
+                        "conId": con_id,
+                        "label": label,
+                        "isUnderlying": True,
+                    })
 
-                contracts.append({
-                    "conId": contract.conId,
-                    "label": label,
-                })
-        except Exception:
-            pass  # Return empty list on error
+            # Put underlyings first so the frontend picks them by default
+            chart_contracts = underlyings + options
 
-        return contracts
+        except Exception as e:
+            import traceback
+            print(f"[Chart] Error collecting chart contracts: {e}")
+            traceback.print_exc()
+
+        return chart_contracts
 
     # -------------------------------------------------------------------------
-    # Historical Data (uses thread-safe async call)
+    # Bar Data Streaming (for charts)
+    # -------------------------------------------------------------------------
+
+    async def _start_bar_stream(self, contract: Contract) -> bool:
+        """Start a bar data stream for a contract with keepUpToDate.
+
+        This must be called from the main event loop.
+        Returns True if stream started successfully, False otherwise.
+        """
+        con_id = contract.conId
+        if con_id in self._bar_subscriptions:
+            return True  # Already streaming
+
+        # Qualify the contract first to ensure all fields are populated
+        try:
+            qualified = await self.ib.qualifyContractsAsync(contract)
+            if qualified:
+                contract = qualified[0]
+            else:
+                print(f"[Chart] Could not qualify contract {contract.localSymbol or contract.symbol}")
+                return False
+        except Exception as e:
+            print(f"[Chart] Error qualifying contract {contract.localSymbol or contract.symbol}: {e}")
+            return False
+
+        # For options/futures options, use real-time bars (no historical data)
+        # For underlyings, use historical data with keepUpToDate
+        if isinstance(contract, (Option, FuturesOption)):
+            return await self._start_realtime_bar_stream(contract)
+        else:
+            return await self._start_historical_bar_stream(contract)
+
+    async def _start_historical_bar_stream(self, contract: Contract) -> bool:
+        """Start a historical bar stream with keepUpToDate for non-option contracts."""
+        con_id = contract.conId
+        what_to_show_options = ["TRADES", "MIDPOINT"]
+
+        for what_to_show in what_to_show_options:
+            try:
+                bars = await self.ib.reqHistoricalDataAsync(
+                    contract,
+                    endDateTime="",
+                    durationStr="1 D",
+                    barSizeSetting="1 min",
+                    whatToShow=what_to_show,
+                    useRTH=False,
+                    formatDate=1,
+                    keepUpToDate=True,
+                )
+
+                if bars is not None and len(bars) > 0:
+                    self._bar_subscriptions[con_id] = bars
+                    self._store_bar_data(con_id, bars)
+                    bars.updateEvent += lambda b, hasNewBar, cid=con_id: self._on_bar_update(cid, b, hasNewBar)
+                    print(f"[Chart] Started historical bar stream for {contract.localSymbol or contract.symbol} ({con_id}) using {what_to_show}")
+                    return True
+
+            except Exception as e:
+                print(f"[Chart] {what_to_show} failed for {contract.localSymbol or contract.symbol}: {e}")
+                continue
+
+        print(f"[Chart] Could not start bar stream for {contract.localSymbol or contract.symbol}")
+        return False
+
+    async def _start_realtime_bar_stream(self, contract: Contract) -> bool:
+        """Start a real-time market data stream for options using reqMktData.
+
+        Uses the same pattern as IbkrOptionChain._fetch_option_ticker which works
+        reliably for streaming options data. Builds 1-minute OHLC bars from tick updates.
+        """
+        con_id = contract.conId
+
+        try:
+            # Use reqMktData with snapshot=False for streaming (like _fetch_option_ticker)
+            ticker = self.ib.reqMktData(contract, snapshot=False, regulatorySnapshot=False)
+
+            if ticker is not None:
+                self._bar_subscriptions[con_id] = ticker
+                # Initialize with empty bar data - will build up over time
+                with self._bar_data_lock:
+                    self._bar_data[con_id] = []
+                    self._bar_aggregation[con_id] = {
+                        "current_minute": None,
+                        "open": None,
+                        "high": None,
+                        "low": None,
+                        "close": None,
+                    }
+
+                # Subscribe to ticker updates - will aggregate into 1-minute bars
+                ticker.updateEvent += lambda t, cid=con_id: self._on_ticker_update(cid, t)
+                print(f"[Chart] Started market data stream for {contract.localSymbol or contract.symbol} ({con_id})")
+                return True
+
+        except Exception as e:
+            print(f"[Chart] Market data stream failed for {contract.localSymbol or contract.symbol}: {e}")
+
+        print(f"[Chart] Could not start market data stream for {contract.localSymbol or contract.symbol}")
+        return False
+
+    def _on_ticker_update(self, con_id: int, ticker) -> None:
+        """Callback for ticker updates - aggregate into 1-minute OHLC bars.
+
+        Uses bid/ask midpoint for price, falling back to last price if available.
+        This mirrors how IbkrOptionChain streams options data.
+        """
+        if not ticker:
+            return
+
+        # Calculate price from bid/ask midpoint, or use last price as fallback
+        bid = ticker.bid if ticker.bid and ticker.bid > 0 else None
+        ask = ticker.ask if ticker.ask and ticker.ask > 0 else None
+        last = ticker.last if ticker.last and ticker.last > 0 else None
+
+        if bid and ask:
+            price = (bid + ask) / 2
+        elif last:
+            price = last
+        else:
+            return  # No valid price yet
+
+        # Get current time and round down to the minute
+        tick_time = ticker.time if ticker.time else datetime.now()
+        current_minute = tick_time.replace(second=0, microsecond=0)
+        minute_timestamp = int(current_minute.timestamp())
+
+        with self._bar_data_lock:
+            if con_id not in self._bar_aggregation:
+                self._bar_aggregation[con_id] = {
+                    "current_minute": None,
+                    "open": None,
+                    "high": None,
+                    "low": None,
+                    "close": None,
+                }
+
+            agg = self._bar_aggregation[con_id]
+
+            if agg["current_minute"] != minute_timestamp:
+                # New minute started - save the previous bar if we have one
+                if agg["current_minute"] is not None and agg["open"] is not None:
+                    bar_data = self._bar_data.get(con_id, [])
+                    bar_data.append({
+                        "time": agg["current_minute"],
+                        "open": agg["open"],
+                        "high": agg["high"],
+                        "low": agg["low"],
+                        "close": agg["close"],
+                    })
+                    self._bar_data[con_id] = bar_data
+
+                # Start new minute
+                agg["current_minute"] = minute_timestamp
+                agg["open"] = price
+                agg["high"] = price
+                agg["low"] = price
+                agg["close"] = price
+            else:
+                # Same minute - update OHLC
+                agg["high"] = max(agg["high"], price) if agg["high"] else price
+                agg["low"] = min(agg["low"], price) if agg["low"] else price
+                agg["close"] = price
+
+    def _store_bar_data(self, con_id: int, bars) -> None:
+        """Convert BarDataList to our format and store thread-safely."""
+        bar_list = [
+            {
+                "time": int(bar.date.timestamp()),
+                "open": bar.open,
+                "high": bar.high,
+                "low": bar.low,
+                "close": bar.close,
+            }
+            for bar in bars
+        ]
+        with self._bar_data_lock:
+            self._bar_data[con_id] = bar_list
+
+    def _on_bar_update(self, con_id: int, bars, _hasNewBar: bool) -> None:
+        """Callback when bar data updates from IB."""
+        self._store_bar_data(con_id, bars)
+
+    def _stop_bar_stream(self, con_id: int) -> None:
+        """Stop a bar data stream (handles both historical and market data streams)."""
+        if con_id in self._bar_subscriptions:
+            subscription = self._bar_subscriptions[con_id]
+            try:
+                # Try different cancel methods depending on subscription type
+                # Historical data uses cancelHistoricalData
+                # Market data (Ticker) uses cancelMktData
+                try:
+                    self.ib.cancelHistoricalData(subscription)
+                except Exception:
+                    try:
+                        self.ib.cancelMktData(subscription.contract)
+                    except Exception:
+                        pass  # Already cancelled or invalid
+            except Exception as e:
+                print(f"[Chart] Error stopping bar stream for {con_id}: {e}")
+            del self._bar_subscriptions[con_id]
+
+            with self._bar_data_lock:
+                if con_id in self._bar_data:
+                    del self._bar_data[con_id]
+                if con_id in self._bar_aggregation:
+                    del self._bar_aggregation[con_id]
+
+    def _get_bar_data(self, con_id: int) -> list[dict]:
+        """Get bar data for a contract (thread-safe, called from Flask).
+
+        Includes the current incomplete bar from aggregation state for options.
+        Timestamps are shifted from UTC to local timezone (accounting for DST).
+        """
+        with self._bar_data_lock:
+            bars = list(self._bar_data.get(con_id, []))
+
+            # Include current incomplete bar from aggregation (for options streaming)
+            agg = self._bar_aggregation.get(con_id)
+            if agg and agg["current_minute"] is not None and agg["open"] is not None:
+                bars.append({
+                    "time": agg["current_minute"],
+                    "open": agg["open"],
+                    "high": agg["high"],
+                    "low": agg["low"],
+                    "close": agg["close"],
+                })
+
+            # Shift timestamps from UTC to local timezone
+            # LightweightCharts doesn't have timezone settings, so we shift the data
+            return [self._shift_bar_to_local_tz(bar) for bar in bars]
+
+    def _shift_bar_to_local_tz(self, bar: dict) -> dict:
+        """Shift a bar's timestamp from UTC to local timezone (accounting for DST)."""
+        utc_ts = bar["time"]
+        # Convert UTC timestamp to datetime, get local timezone offset at that time
+        utc_dt = datetime.utcfromtimestamp(utc_ts)
+        local_dt = datetime.fromtimestamp(utc_ts)
+        # The offset is the difference between local and UTC
+        offset_seconds = int((local_dt - utc_dt).total_seconds())
+        return {
+            "time": utc_ts + offset_seconds,
+            "open": bar["open"],
+            "high": bar["high"],
+            "low": bar["low"],
+            "close": bar["close"],
+        }
+
+    # -------------------------------------------------------------------------
+    # Historical Data (legacy - uses thread-safe async call)
     # -------------------------------------------------------------------------
 
     def _get_historical_data(self, con_id: int) -> list[dict]:
@@ -558,5 +1275,9 @@ class IbkrWebapp:
         print(f"Webapp started on http://localhost:{port}")
 
     def stop(self) -> None:
-        """Stop the webapp."""
+        """Stop the webapp and clean up resources."""
         self._running = False
+
+        # Stop all bar data streams
+        for con_id in list(self._bar_subscriptions.keys()):
+            self._stop_bar_stream(con_id)
