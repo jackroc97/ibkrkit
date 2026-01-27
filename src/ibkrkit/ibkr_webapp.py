@@ -13,12 +13,12 @@ import json
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from flask import Flask, render_template, Response, jsonify
 
-from ib_async import IB, Option, FuturesOption, Bag
+from ib_async import IB, Option, FuturesOption, Bag, Contract
 
 if TYPE_CHECKING:
     from .ibkr_strategy import IbkrStrategy
@@ -76,6 +76,7 @@ class IbkrWebapp:
         self.strategy = strategy
         self._data_store = WebappDataStore()
         self._contract_cache: dict[int, Any] = {}  # conId -> contract
+        self._under_symbol_cache: dict[int, str] = {}  # conId -> underSymbol
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._running = False
@@ -89,7 +90,7 @@ class IbkrWebapp:
         def index():
             snapshot = self._data_store.get_snapshot()
             return render_template(
-                "index.html",
+                "new_index.html",
                 strategy_name=getattr(self.strategy, "name", "Unknown Strategy"),
                 strategy_version=getattr(self.strategy, "version", "0.0.0"),
                 state=snapshot["state"],
@@ -138,8 +139,8 @@ class IbkrWebapp:
         It's safe to call ib_async methods here.
         """
         state = self._compute_state()
-        positions = self._collect_positions()
-        orders = self._collect_orders()
+        positions = await self._collect_positions()
+        orders = await self._collect_orders()
         trades = await self._collect_trades()
         chart_contracts = self._collect_chart_contracts()
 
@@ -171,8 +172,28 @@ class IbkrWebapp:
             return "CALL"
         return right
 
-    def _collect_positions(self) -> list[dict]:
-        """Collect open positions with PnL."""
+    async def _get_under_symbol(self, contract: Contract) -> str:
+        """Get the full underlying symbol for an option contract.
+
+        For options/futures options, this returns the underlying symbol
+        (e.g., 'ESH6' instead of just 'ES').
+        """
+        if contract.conId in self._under_symbol_cache:
+            return self._under_symbol_cache[contract.conId]
+
+        try:
+            details_list = await self.ib.reqContractDetailsAsync(contract)
+            if details_list:
+                under_symbol = details_list[0].underSymbol or contract.symbol
+                self._under_symbol_cache[contract.conId] = under_symbol
+                return under_symbol
+        except Exception:
+            pass
+
+        return contract.symbol
+
+    async def _collect_positions(self) -> list[dict]:
+        """Collect open positions with PnL and entry price."""
         positions = []
         try:
             portfolio_items = {
@@ -184,24 +205,31 @@ class IbkrWebapp:
                 portfolio_item = portfolio_items.get(contract.conId)
 
                 pnl = 0.0
+                avg_cost = 0.0
                 if portfolio_item:
                     pnl = portfolio_item.unrealizedPNL or 0.0
+                    avg_cost = portfolio_item.averageCost or 0.0
 
                 # Build condensed position description
                 if isinstance(contract, (Option, FuturesOption)):
-                    symbol = contract.symbol
+                    # Get full underlying symbol (e.g., "ESH6" instead of "ES")
+                    under_symbol = await self._get_under_symbol(contract)
                     exp_short = self._format_expiration(contract.lastTradeDateOrContractMonth)
                     strike = int(contract.strike) if contract.strike == int(contract.strike) else contract.strike
                     right = self._format_right(contract.right)
-                    description = f"{exp_short} {symbol} {strike} {right}"
+                    description = f"{exp_short} {under_symbol} {strike} {right}"
                 else:
                     symbol = contract.localSymbol or contract.symbol
                     description = symbol
 
                 qty = int(pos.position) if pos.position == int(pos.position) else pos.position
+                # is_short determines if this is a credit (short) or debit (long) position
+                is_short = qty < 0
                 positions.append({
                     "quantity": qty,
                     "description": description,
+                    "avg_cost": avg_cost,
+                    "is_credit": is_short,  # Short positions were opened with a credit
                     "pnl": pnl,
                 })
         except Exception:
@@ -209,21 +237,35 @@ class IbkrWebapp:
 
         return positions
 
-    def _format_contract_from_conid(self, con_id: int) -> str:
+    async def _format_contract_from_conid(self, con_id: int) -> str:
         """Format a contract description from conId using the cache."""
         cached = self._contract_cache.get(con_id)
         if cached:
             if isinstance(cached, (Option, FuturesOption)):
+                under_symbol = await self._get_under_symbol(cached)
                 exp_short = self._format_expiration(cached.lastTradeDateOrContractMonth)
                 strike = int(cached.strike) if cached.strike == int(cached.strike) else cached.strike
                 right = self._format_right(cached.right)
-                return f"{exp_short} {cached.symbol} {strike} {right}"
+                return f"{exp_short} {under_symbol} {strike} {right}"
             else:
                 return cached.localSymbol or cached.symbol or f"Contract {con_id}"
         return f"Contract {con_id}"
 
-    def _collect_orders(self) -> list[dict]:
-        """Collect open orders."""
+    def _abbreviate_status(self, status: str) -> str:
+        """Abbreviate order status for display."""
+        abbreviations = {
+            "Submitted": "SUBM",
+            "PreSubmitted": "PEND",
+            "PendingSubmit": "PEND",
+            "PendingCancel": "CANC",
+            "Cancelled": "CANC",
+            "Filled": "FILL",
+            "Inactive": "INAC",
+        }
+        return abbreviations.get(status, status[:4].upper() if status else "")
+
+    async def _collect_orders(self) -> list[dict]:
+        """Collect open orders with combo legs grouped together."""
         orders = []
         try:
             for trade in self.ib.openTrades():
@@ -236,58 +278,65 @@ class IbkrWebapp:
 
                 # Handle BAG (combo) contracts
                 if isinstance(contract, Bag) and contract.comboLegs:
-                    # This is a spread order - format each leg
-                    # Credit = selling the spread, Debit = buying the spread
+                    # This is a spread order - collect all legs into one order item
                     is_credit = order.action == "SELL"
-                    price_suffix = "cr" if is_credit else "db"
+                    limit_price = order.lmtPrice if order.lmtPrice else 0.0
 
-                    for i, leg in enumerate(contract.comboLegs):
+                    legs = []
+                    for leg in contract.comboLegs:
                         # Determine leg action prefix
-                        # BTO = Buy to Open, STO = Sell to Open, etc.
+                        # BTO = Buy to Open, STO = Sell to Open
+                        # BTC = Buy to Close, STC = Sell to Close
                         if order.action == "BUY":
-                            leg_prefix = "BTO" if leg.action == "BUY" else "STO"
+                            leg_action = "BTO" if leg.action == "BUY" else "STO"
                         else:
-                            leg_prefix = "BTC" if leg.action == "BUY" else "STC"
+                            leg_action = "BTC" if leg.action == "BUY" else "STC"
 
                         leg_qty = leg.ratio
-                        leg_desc = self._format_contract_from_conid(leg.conId)
+                        leg_desc = await self._format_contract_from_conid(leg.conId)
 
-                        # Only show price on first leg
-                        is_first = (i == 0)
-                        limit_price = order.lmtPrice if is_first and order.lmtPrice else 0.0
-                        price_display = f"${abs(limit_price):.2f} {price_suffix}" if limit_price else ""
-
-                        orders.append({
-                            "quantity": f"{leg_prefix} {leg_qty}",
+                        legs.append({
+                            "action": leg_action,
+                            "quantity": leg_qty,
                             "description": leg_desc,
-                            "limit_price": limit_price,
-                            "price_display": price_display,
-                            "status": trade.orderStatus.status if is_first else "",
-                            "is_combo": True,
-                            "is_first_leg": is_first,
                         })
+
+                    orders.append({
+                        "legs": legs,
+                        "limit_price": limit_price,
+                        "is_credit": is_credit,
+                        "status": self._abbreviate_status(trade.orderStatus.status),
+                        "is_combo": True,
+                    })
                 else:
                     # Regular single-leg order
                     if isinstance(contract, (Option, FuturesOption)):
-                        symbol = contract.symbol
+                        under_symbol = await self._get_under_symbol(contract)
                         exp_short = self._format_expiration(contract.lastTradeDateOrContractMonth)
                         strike = int(contract.strike) if contract.strike == int(contract.strike) else contract.strike
                         right = self._format_right(contract.right)
-                        description = f"{exp_short} {symbol} {strike} {right}"
+                        description = f"{exp_short} {under_symbol} {strike} {right}"
                     else:
                         symbol = contract.localSymbol or contract.symbol
                         description = symbol
 
                     limit_price = order.lmtPrice if order.lmtPrice else (order.auxPrice or 0.0)
                     qty = int(order.totalQuantity) if order.totalQuantity == int(order.totalQuantity) else order.totalQuantity
-                    action_prefix = "+" if order.action == "BUY" else "-"
+
+                    # Determine action: BTO/STO for opening, BTC/STC for closing
+                    # For simplicity, use BTO for buys and STO for sells
+                    action = "BTO" if order.action == "BUY" else "STO"
+                    is_credit = order.action == "SELL"
 
                     orders.append({
-                        "quantity": f"{action_prefix}{qty}",
-                        "description": description,
+                        "legs": [{
+                            "action": action,
+                            "quantity": qty,
+                            "description": description,
+                        }],
                         "limit_price": limit_price,
-                        "price_display": f"${limit_price:.2f}" if limit_price else "",
-                        "status": trade.orderStatus.status,
+                        "is_credit": is_credit,
+                        "status": self._abbreviate_status(trade.orderStatus.status),
                         "is_combo": False,
                     })
         except Exception:
@@ -296,13 +345,12 @@ class IbkrWebapp:
         return orders
 
     async def _collect_trades(self) -> list[dict]:
-        """Collect trades using execution reports from IB.
+        """Collect filled orders using execution reports from IB.
 
-        Note: IB only provides execution reports for the current trading day.
-        For historical trades beyond that, external storage would be needed.
+        Note: IB only provides execution reports for the current trading day/session.
+        Combo orders are grouped by order ID so all legs appear together.
         """
         trades = []
-        cutoff = datetime.now() - timedelta(days=30)
 
         try:
             # Request execution reports from IB - this populates ib.fills()
@@ -312,43 +360,74 @@ class IbkrWebapp:
             # Now get all fills (includes the ones we just requested)
             all_fills = self.ib.fills()
 
+            # Group fills by order ID to combine combo legs
+            fills_by_order: dict[int, list] = {}
             for fill in all_fills:
-                fill_time = fill.time
-                if fill_time.tzinfo:
-                    fill_time = fill_time.replace(tzinfo=None)
-                if fill_time < cutoff:
+                order_id = fill.execution.orderId
+                if order_id not in fills_by_order:
+                    fills_by_order[order_id] = []
+                fills_by_order[order_id].append(fill)
+
+            for order_id, fills in fills_by_order.items():
+                if not fills:
                     continue
 
-                fill_contract = fill.contract
-                execution = fill.execution
+                # Use the earliest fill time for sorting
+                fills.sort(key=lambda f: f.time)
+                first_fill = fills[0]
+                fill_time = first_fill.time
+                time_str = fill_time.strftime("%Y-%m-%d %H:%M:%S")
 
-                # Cache fill contract
-                if fill_contract.conId:
-                    self._contract_cache[fill_contract.conId] = fill_contract
+                legs = []
+                total_credit = 0.0  # Track net credit/debit
 
-                # Build description
-                if isinstance(fill_contract, (Option, FuturesOption)):
-                    symbol = fill_contract.symbol
-                    exp_short = self._format_expiration(fill_contract.lastTradeDateOrContractMonth)
-                    strike = int(fill_contract.strike) if fill_contract.strike == int(fill_contract.strike) else fill_contract.strike
-                    right = self._format_right(fill_contract.right)
-                    description = f"{exp_short} {symbol} {strike} {right}"
-                else:
-                    symbol = fill_contract.localSymbol or fill_contract.symbol
-                    description = symbol
+                for fill in fills:
+                    fill_contract = fill.contract
+                    execution = fill.execution
 
-                qty = int(execution.shares) if execution.shares == int(execution.shares) else execution.shares
-                action_prefix = "+" if execution.side == "BOT" else "-"
-                time_str = fill.time.strftime("%b %d %H:%M")
+                    # Cache fill contract
+                    if fill_contract.conId:
+                        self._contract_cache[fill_contract.conId] = fill_contract
+
+                    # Build description
+                    if isinstance(fill_contract, (Option, FuturesOption)):
+                        under_symbol = await self._get_under_symbol(fill_contract)
+                        exp_short = self._format_expiration(fill_contract.lastTradeDateOrContractMonth)
+                        strike = int(fill_contract.strike) if fill_contract.strike == int(fill_contract.strike) else fill_contract.strike
+                        right = self._format_right(fill_contract.right)
+                        description = f"{exp_short} {under_symbol} {strike} {right}"
+                    else:
+                        symbol = fill_contract.localSymbol or fill_contract.symbol
+                        description = symbol
+
+                    qty = int(execution.shares) if execution.shares == int(execution.shares) else execution.shares
+                    # Determine action: STO for sells, BTO for buys
+                    action = "STO" if execution.side == "SLD" else "BTO"
+
+                    # Track credit/debit: sells are credits, buys are debits
+                    fill_value = execution.price * qty
+                    if execution.side == "SLD":
+                        total_credit += fill_value
+                    else:
+                        total_credit -= fill_value
+
+                    legs.append({
+                        "action": action,
+                        "quantity": qty,
+                        "description": description,
+                    })
+
+                # Determine if overall trade was a credit or debit
+                is_credit = total_credit > 0
+                fill_price = abs(total_credit) / max(sum(leg["quantity"] for leg in legs), 1)
 
                 trades.append({
-                    "time_executed": time_str,
-                    "time_sort": fill.time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "quantity": f"{action_prefix}{qty}",
-                    "description": description,
-                    "price": execution.price,
-                    "price_display": f"${execution.price:.2f}",
-                    "is_combo": False,
+                    "time_sort": time_str,
+                    "legs": legs,
+                    "fill_price": fill_price,
+                    "is_credit": is_credit,
+                    "pnl": None,  # "Open" - we don't track realized PnL yet
+                    "is_combo": len(legs) > 1,
                 })
         except Exception:
             pass  # Return empty list on error
