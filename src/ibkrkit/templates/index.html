@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-bs-theme="dark">
+<html lang="en" data-bs-theme="dark" style="overflow-x: hidden;">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -9,6 +9,11 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.min.js" integrity="sha384-G/EV+4j2dNv+tEPo3++6LCgdCROaejBqfUeNjuKAiuXbjrxilcCdDz6ZAVfHWe1Y" crossorigin="anonymous"></script>
     <script type="text/javascript" src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
     <style>
+        :root {
+            --lwc-up-color: #26a69a;
+            --lwc-down-color: #ef5350;
+        }
+
         html, body {
             height: 100%;
             margin: 0;
@@ -58,22 +63,41 @@
             transition: color 0.15s ease-out;
         }
 
+        /* Bid/Ask flash transition */
+        [id^="order-bidask-"] {
+            transition: color 0.15s ease-out;
+        }
+
         .live-indicator {
             display: inline-block;
             width: 8px;
             height: 8px;
-            background-color: #198754;
+            background-color: var(--lwc-up-color);
             border-radius: 50%;
             margin-right: 6px;
             animation: pulse 2s infinite;
         }
+
+        /* LWC color utility classes */
+        .text-lwc-up { color: var(--lwc-up-color) !important; }
+        .text-lwc-down { color: var(--lwc-down-color) !important; }
+
+        /* LWC badge background colors for status indicator */
+        .badge-lwc-up { background-color: var(--lwc-up-color) !important; color: #fff !important; }
+        .badge-lwc-down { background-color: var(--lwc-down-color) !important; color: #fff !important; }
+
+        /* Ensure dropdown menu appears above chart */
+        .dropdown-menu {
+            z-index: 1050;
+        }
+
         @keyframes pulse {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.4; }
         }
     </style>
 </head>
-<body>
+<body class="overflow-x-hidden">
     <div class="d-flex flex-column app-wrapper">
         <!-- Header Section -->
         <header class="px-3 py-2 row">
@@ -81,7 +105,7 @@
                 {{ strategy_name }} <small class="text-muted fw-light">Version {{ strategy_version }}</small>
             </div>
             <div class="col-4 my-auto text-end">
-                <span id="status-badge" class="badge fs-6 {% if state == 'Live' %}text-bg-success{% elif state == 'Sleep' %}text-bg-warning{% else %}text-bg-danger{% endif %} my-auto text-uppercase">{{ state }}</span>
+                <span id="status-badge" class="badge fs-6 {% if state == 'Live' %}badge-lwc-up{% elif state == 'Sleep' %}text-bg-warning{% else %}badge-lwc-down{% endif %} my-auto text-uppercase">{{ state }}</span>
             </div>
         </header>
 
@@ -90,16 +114,18 @@
             <!-- Chart Section: 2/3 width on lg+, 1/2 width on md, full width on mobile -->
             <div class="col-12 col-md-6 col-lg-8 p-0 d-flex flex-column chart-section">
                 <div class="px-3 py-2 border-bottom d-flex align-items-center">
-                    <div class="dropdown">
-                      <button id="chart-contract-btn" class="btn btn-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+                    <div class="dropdown overflow-hidden">
+                      <button id="chart-contract-btn" class="btn btn-secondary dropdown-toggle w-100 text-truncate" type="button" data-bs-toggle="dropdown" data-bs-popper-config='{"strategy":"fixed"}' aria-expanded="false">
                         Select Contract
                       </button>
                       <ul id="chart-contract-menu" class="dropdown-menu dropdown-menu-dark">
                         <!-- Populated dynamically from chart_contracts -->
                       </ul>
                     </div>
-                    <div id="chart-last-price" class="h4 mx-3 my-0">
-                        --
+
+                    <div id="chart-last-price" class="h4 ms-3 my-0 d-flex align-items-center">
+                        <span id="chart-price-value" class="fw-bold">--</span>
+                        <span id="chart-price-pct" class="ms-2" style="font-size: 0.7em;"></span>
                     </div>
                 </div>
                 <div id="chart-container" class="w-100 h-100"></div>
@@ -113,9 +139,9 @@
                     <table class="table mb-0 text-nowrap">
                         <thead>
                             <tr>
-                                <th class="py-1 text-secondary text-left text-uppercase" colspan="3">Position / Symbol</th>
-                                <th class="py-1 text-secondary text-center text-uppercase text-nowrap">Entry Price</th>
-                                <th class="py-1 text-secondary text-end text-uppercase">PnL</th>
+                                <th class="py-1 bg-light-subtle text-secondary text-left text-uppercase" colspan="3">Position / Symbol</th>
+                                <th class="py-1 bg-light-subtle text-secondary text-center text-uppercase text-nowrap">Entry Price</th>
+                                <th class="py-1 bg-light-subtle text-secondary text-end text-uppercase">PnL</th>
                             </tr>
                         </thead>
                         <tbody id="positions-body">
@@ -129,7 +155,7 @@
                                     <td class="text-left {% if loop.last %}border-bottom-0{% endif %}" style="width: 50%">{{ pos.description }}</td>
                                     <td class="text-center text-nowrap {% if loop.last %}border-bottom-0{% endif %}">{{ "%.2f"|format(pos.avg_cost|abs) }} {% if pos.is_credit %}cr{% else %}db{% endif %}</td>
                                     <td class="text-end {% if loop.last %}border-bottom-0{% endif %}">
-                                        <span class="{% if pos.pnl >= 0 %}text-success{% else %}text-danger{% endif %} fw-bold text-uppercase">${{ "%.2f"|format(pos.pnl|abs) }}</span>
+                                        <span class="{% if pos.pnl >= 0 %}text-lwc-up{% else %}text-lwc-down{% endif %} fw-bold text-uppercase">${{ "%.2f"|format(pos.pnl|abs) }}</span>
                                     </td>
                                 </tr>
                                 {% endfor %}
@@ -147,9 +173,9 @@
                     <table class="table mb-0 text-nowrap">
                         <thead>
                             <tr>
-                                <th class="py-1 text-secondary text-left text-uppercase" colspan="3">Action / Qty / Symbol</th>
-                                <th class="py-1 text-secondary text-center text-uppercase text-nowrap">Lmt Price</th>
-                                <th class="py-1 text-secondary text-end text-uppercase">Status</th>
+                                <th class="py-1 text-secondary bg-light-subtle text-left text-uppercase" colspan="3">Action / Qty / Symbol</th>
+                                <th class="py-1 text-secondary bg-light-subtle text-center text-uppercase text-nowrap">Lmt Price</th>
+                                <th class="py-1 text-secondary bg-light-subtle text-end text-uppercase">Bid/Ask</th>
                             </tr>
                         </thead>
                         <tbody id="orders-body">
@@ -175,7 +201,11 @@
                                         {% if order.limit_price %}{{ "%.2f"|format(order.limit_price|abs) }} {% if order.is_credit %}cr{% else %}db{% endif %}{% endif %}
                                     </td>
                                     <td class="text-end align-middle {% if loop.last %}border-bottom-0{% endif %}">
-                                        <span class="text-secondary fw-bold text-uppercase">{{ order.status }}</span>
+                                        {% if order.bid is not none and order.ask is not none %}
+                                        <span class="text-secondary fw-bold">{{ "%.2f"|format(order.bid) }} / {{ "%.2f"|format(order.ask) }}</span>
+                                        {% else %}
+                                        <span class="text-secondary fw-bold">--</span>
+                                        {% endif %}
                                     </td>
                                 </tr>
                                 {% endfor %}
@@ -193,9 +223,9 @@
                     <table class="table mb-0 text-nowrap">
                         <thead>
                             <tr>
-                                <th class="py-1 text-secondary text-left text-uppercase" colspan="3">Action / Qty / Symbol</th>
-                                <th class="py-1 text-secondary text-center text-uppercase text-nowrap">Fill Price</th>
-                                <th class="py-1 text-secondary text-end text-uppercase">PnL</th>
+                                <th class="py-1 bg-light-subtle text-secondary text-left text-uppercase" colspan="3">Action / Qty / Symbol</th>
+                                <th class="py-1 bg-light-subtle text-secondary text-center text-uppercase text-nowrap">Fill Price</th>
+                                <th class="py-1 bg-light-subtle text-secondary text-end text-uppercase">PnL</th>
                             </tr>
                         </thead>
                         <tbody id="trades-body">
@@ -226,9 +256,9 @@
                                         {% elif trade.pnl is none %}
                                         <span class="text-secondary fw-bold text-uppercase">N/A</span>
                                         {% elif trade.pnl >= 0 %}
-                                        <span class="text-success fw-bold text-uppercase">${{ "%.2f"|format(trade.pnl|abs) }}</span>
+                                        <span class="text-lwc-up fw-bold text-uppercase">${{ "%.2f"|format(trade.pnl|abs) }}</span>
                                         {% else %}
-                                        <span class="text-danger fw-bold text-uppercase">${{ "%.2f"|format(trade.pnl|abs) }}</span>
+                                        <span class="text-lwc-down fw-bold text-uppercase">${{ "%.2f"|format(trade.pnl|abs) }}</span>
                                         {% endif %}
                                     </td>
                                 </tr>
@@ -255,12 +285,15 @@
     // Chart initialization
     let chart = null;
     let mainSeries = null;
+    let volumeSeries = null;
     let currentChartConId = null;
     let currentChartLabel = null;
     let currentChartIsUnderlying = false;
     let chartContractsCache = [];
     let breakEvenLines = [];  // Track price lines for removal when switching contracts
     let lastDisplayedPrice = null;  // Track previous price for flash animation
+    let dayStartPrice = null;  // Track the first bar's open price for percentage calculation
+    let previousOrderBidAsks = {};  // Track previous bid/ask values for flash animation (keyed by order index)
 
     document.addEventListener('DOMContentLoaded', function() {
         console.log('[DEBUG] DOMContentLoaded fired');
@@ -273,6 +306,7 @@
             layout: {
                 background: { type: 'solid', color: bgColor },
                 textColor: '#dee2e6',
+                attributionLogo: false,
             },
             grid: {
                 vertLines: { color: borderColor },
@@ -288,14 +322,34 @@
             },
         });
 
-        // Use Bootstrap text-success (#198754) and text-danger (#dc3545) for candle colors
+        // Use LightweightCharts default colors
+        const lwcUpColor = getComputedStyle(document.documentElement).getPropertyValue('--lwc-up-color').trim();
+        const lwcDownColor = getComputedStyle(document.documentElement).getPropertyValue('--lwc-down-color').trim();
+
         mainSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
-            upColor: '#198754',       // Bootstrap text-success (green)
-            downColor: '#dc3545',     // Bootstrap text-danger (red)
-            borderUpColor: '#198754',
-            borderDownColor: '#dc3545',
-            wickUpColor: '#198754',
-            wickDownColor: '#dc3545',
+            upColor: lwcUpColor,
+            downColor: lwcDownColor,
+            borderUpColor: lwcUpColor,
+            borderDownColor: lwcDownColor,
+            wickUpColor: lwcUpColor,
+            wickDownColor: lwcDownColor,
+        });
+
+        // Add volume histogram series with its own price scale
+        volumeSeries = chart.addSeries(LightweightCharts.HistogramSeries, {
+            priceFormat: {
+                type: 'volume',
+            },
+            priceScaleId: 'volume',
+        });
+
+        // Configure the volume price scale (on the left, smaller)
+        chart.priceScale('volume').applyOptions({
+            scaleMargins: {
+                top: 0.8,  // Volume takes up bottom 20% of chart
+                bottom: 0,
+            },
+            borderVisible: false,
         });
 
         const resizeObserver = new ResizeObserver(entries => {
@@ -368,6 +422,7 @@
         currentChartConId = conId;
         currentChartLabel = label;
         lastDisplayedPrice = null;  // Reset so first load doesn't flash
+        dayStartPrice = null;  // Reset day start price for new contract
 
         // Determine if this is an underlying from the cache if not provided
         if (isUnderlying === null) {
@@ -452,27 +507,59 @@
             console.log('[Chart] Received', data ? data.length : 0, 'bars for conId', conId);
             if (data && data.length > 0 && mainSeries) {
                 mainSeries.setData(data);
+
+                // Set volume data with color based on price direction
+                if (volumeSeries) {
+                    const lwcUpColor = getComputedStyle(document.documentElement).getPropertyValue('--lwc-up-color').trim();
+                    const lwcDownColor = getComputedStyle(document.documentElement).getPropertyValue('--lwc-down-color').trim();
+                    const volumeData = data.map(bar => ({
+                        time: bar.time,
+                        value: bar.volume || 0,
+                        color: bar.close >= bar.open ? lwcUpColor : lwcDownColor,
+                    }));
+                    volumeSeries.setData(volumeData);
+                }
+
                 chart.timeScale().fitContent();
 
-                // Update last price display with flash animation
+                // Update last price display with flash animation and percentage
                 const lastBar = data[data.length - 1];
-                const priceDisplay = document.getElementById('chart-last-price');
-                if (priceDisplay && lastBar) {
+                const firstBar = data[0];
+                const priceValueEl = document.getElementById('chart-price-value');
+                const pricePctEl = document.getElementById('chart-price-pct');
+
+                if (priceValueEl && lastBar) {
                     const newPrice = lastBar.close;
-                    priceDisplay.textContent = newPrice.toLocaleString('en-US', {
+
+                    // Set day start price from first bar's open (only on first load for this contract)
+                    if (dayStartPrice === null && firstBar) {
+                        dayStartPrice = firstBar.open;
+                    }
+
+                    // Update price display
+                    priceValueEl.textContent = newPrice.toLocaleString('en-US', {
                         minimumFractionDigits: 2,
                         maximumFractionDigits: 2
                     });
 
                     // Flash animation based on price change
                     if (lastDisplayedPrice !== null && newPrice !== lastDisplayedPrice) {
-                        const flashClass = newPrice > lastDisplayedPrice ? 'text-success' : 'text-danger';
-                        priceDisplay.classList.add(flashClass);
+                        const flashClass = newPrice > lastDisplayedPrice ? 'text-lwc-up' : 'text-lwc-down';
+                        priceValueEl.classList.add(flashClass);
                         setTimeout(() => {
-                            priceDisplay.classList.remove(flashClass);
+                            priceValueEl.classList.remove(flashClass);
                         }, 300);
                     }
                     lastDisplayedPrice = newPrice;
+
+                    // Update percentage display
+                    if (pricePctEl && dayStartPrice !== null && dayStartPrice !== 0) {
+                        const pctChange = ((newPrice - dayStartPrice) / dayStartPrice) * 100;
+                        const pctSign = pctChange >= 0 ? '+' : '';
+                        pricePctEl.textContent = `(${pctSign}${pctChange.toFixed(2)}%)`;
+                        pricePctEl.className = 'ms-2 ' + (pctChange >= 0 ? 'text-lwc-up' : 'text-lwc-down');
+                        pricePctEl.style.fontSize = '0.7em';
+                    }
                 }
 
                 // Load breakevens for underlying charts
@@ -493,11 +580,11 @@
         badge.textContent = state;
         badge.className = 'badge fs-6 my-auto text-uppercase ';
         if (state === 'Live') {
-            badge.classList.add('text-bg-success');
+            badge.classList.add('badge-lwc-up');
         } else if (state === 'Sleep') {
             badge.classList.add('text-bg-warning');
         } else {
-            badge.classList.add('text-bg-danger');
+            badge.classList.add('badge-lwc-down');
         }
     }
 
@@ -512,7 +599,7 @@
             const isLast = index === positions.length - 1;
             const borderClass = isLast ? 'border-bottom-0' : '';
             const posType = pos.quantity < 0 ? 'SHO' : 'LON';
-            const pnlClass = pos.pnl >= 0 ? 'text-success' : 'text-danger';
+            const pnlClass = pos.pnl >= 0 ? 'text-lwc-up' : 'text-lwc-down';
             const crDb = pos.is_credit ? 'cr' : 'db';
             html += `<tr>
                 <td class="text-end ${borderClass}" style="width: 0px"><span class="badge bg-secondary">${posType}</span></td>
@@ -529,8 +616,13 @@
         const tbody = document.getElementById('orders-body');
         if (!orders || orders.length === 0) {
             tbody.innerHTML = '<tr><td colspan="5" class="text-center text-secondary border-bottom-0">No open orders at this time</td></tr>';
+            previousOrderBidAsks = {};
             return;
         }
+
+        // Build a key for each order based on its description (to track bid/ask changes)
+        const newBidAsks = {};
+
         let html = '';
         orders.forEach((order, index) => {
             const isLast = index === orders.length - 1;
@@ -542,15 +634,59 @@
             const descsHtml = order.legs.map(leg => leg.description).join('<br>');
             const priceHtml = order.limit_price ? `${Math.abs(order.limit_price).toFixed(2)} ${crDb}` : '';
 
+            // Create unique key for this order based on legs description
+            const orderKey = order.legs.map(leg => leg.description).join('|');
+
+            // Build bid/ask display showing both values
+            let bidAskHtml;
+            if (order.bid !== null && order.bid !== undefined && order.ask !== null && order.ask !== undefined) {
+                const bidValue = order.bid.toFixed(2);
+                const askValue = order.ask.toFixed(2);
+                const midpoint = (order.bid + order.ask) / 2;
+                newBidAsks[orderKey] = midpoint;
+
+                // Check for flash animation based on midpoint change
+                const prevMidpoint = previousOrderBidAsks[orderKey];
+                let flashClass = '';
+                if (prevMidpoint !== undefined && prevMidpoint !== midpoint) {
+                    flashClass = midpoint > prevMidpoint ? 'text-lwc-up' : 'text-lwc-down';
+                }
+
+                bidAskHtml = `<span id="order-bidask-${index}" class="fw-bold ${flashClass || 'text-secondary'}">${bidValue} / ${askValue}</span>`;
+            } else {
+                bidAskHtml = '<span class="text-secondary fw-bold">--</span>';
+            }
+
             html += `<tr>
                 <td class="text-end align-middle ${borderClass}" style="width: 0px">${actionsHtml}</td>
                 <td class="text-end align-middle ${borderClass}" style="width: 0px">${qtysHtml}</td>
                 <td class="text-left align-middle ${borderClass}" style="width: 50%">${descsHtml}</td>
                 <td class="text-center align-middle text-nowrap ${borderClass}">${priceHtml}</td>
-                <td class="text-end align-middle ${borderClass}"><span class="text-secondary fw-bold text-uppercase">${order.status}</span></td>
+                <td class="text-end align-middle ${borderClass}">${bidAskHtml}</td>
             </tr>`;
         });
         tbody.innerHTML = html;
+
+        // Schedule removal of flash classes after animation
+        orders.forEach((order, index) => {
+            if (order.bid !== null && order.bid !== undefined && order.ask !== null && order.ask !== undefined) {
+                const orderKey = order.legs.map(leg => leg.description).join('|');
+                const midpoint = (order.bid + order.ask) / 2;
+                const prevMidpoint = previousOrderBidAsks[orderKey];
+                if (prevMidpoint !== undefined && prevMidpoint !== midpoint) {
+                    const el = document.getElementById(`order-bidask-${index}`);
+                    if (el) {
+                        setTimeout(() => {
+                            el.classList.remove('text-lwc-up', 'text-lwc-down');
+                            el.classList.add('text-secondary');
+                        }, 300);
+                    }
+                }
+            }
+        });
+
+        // Update previous bid/ask tracking
+        previousOrderBidAsks = newBidAsks;
     }
 
     function renderTrades(trades) {
@@ -575,9 +711,9 @@
             } else if (trade.pnl === null) {
                 pnlHtml = '<span class="text-secondary fw-bold text-uppercase">N/A</span>';
             } else if (trade.pnl >= 0) {
-                pnlHtml = `<span class="text-success fw-bold text-uppercase">$${Math.abs(trade.pnl).toFixed(2)}</span>`;
+                pnlHtml = `<span class="text-lwc-up fw-bold text-uppercase">$${Math.abs(trade.pnl).toFixed(2)}</span>`;
             } else {
-                pnlHtml = `<span class="text-danger fw-bold text-uppercase">$${Math.abs(trade.pnl).toFixed(2)}</span>`;
+                pnlHtml = `<span class="text-lwc-down fw-bold text-uppercase">$${Math.abs(trade.pnl).toFixed(2)}</span>`;
             }
 
             const fillPriceHtml = trade.is_expiration ? '-.-- db' : `${Math.abs(trade.fill_price).toFixed(2)} ${crDb}`;

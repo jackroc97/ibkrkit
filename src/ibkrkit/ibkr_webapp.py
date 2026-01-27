@@ -88,6 +88,9 @@ class IbkrWebapp:
         self._bar_subscriptions: dict[int, Any] = {}  # conId -> BarDataList from reqHistoricalData
         self._bar_aggregation: dict[int, dict] = {}  # conId -> current minute aggregation state
 
+        # Tickers for bid/ask data (separate from bar subscriptions)
+        self._bid_ask_tickers: dict[int, Any] = {}  # conId -> Ticker for bid/ask access
+
         # Breakeven data for chart price lines (thread-safe access required)
         self._breakevens: dict[int, list[dict]] = {}  # underlying conId -> list of breakeven info
 
@@ -584,6 +587,64 @@ class IbkrWebapp:
             # Selling: if we're long, this closes; otherwise it opens
             return "STC" if position_qty > 0 else "STO"
 
+    def _get_contract_bid_ask(self, con_id: int) -> tuple[float | None, float | None]:
+        """Get the current bid/ask for a contract from its ticker.
+
+        Returns:
+            Tuple of (bid, ask), either may be None if not available.
+        """
+        ticker = self._bid_ask_tickers.get(con_id)
+        if not ticker:
+            return None, None
+
+        bid = ticker.bid if ticker.bid and ticker.bid > 0 else None
+        ask = ticker.ask if ticker.ask and ticker.ask > 0 else None
+        return bid, ask
+
+    def _calculate_combo_bid_ask(
+        self, legs: list[dict]
+    ) -> tuple[float | None, float | None]:
+        """Calculate the combo bid and ask prices from individual leg bid/asks.
+
+        The combo bid is what we'd receive if we SELL the combo.
+        The combo ask is what we'd pay if we BUY the combo.
+
+        For each leg based on its action in the combo definition:
+        - BUY leg: buying the combo means we buy this leg (pay ask), selling means we sell (receive bid)
+        - SELL leg: buying the combo means we sell this leg (receive bid), selling means we buy (pay ask)
+
+        Args:
+            legs: List of leg dicts with 'con_id', 'action', and 'ratio'
+
+        Returns:
+            Tuple of (combo_bid, combo_ask). Either may be None if any leg bid/ask unavailable.
+        """
+        combo_bid = 0.0  # What we'd receive if we SELL the combo
+        combo_ask = 0.0  # What we'd pay if we BUY the combo
+
+        for leg in legs:
+            con_id = leg.get('con_id')
+            leg_action = leg.get('action')  # BUY or SELL as defined in the combo
+            ratio = leg.get('ratio', 1)
+
+            if not con_id:
+                return None, None
+
+            bid, ask = self._get_contract_bid_ask(con_id)
+            if bid is None or ask is None:
+                return None, None
+
+            if leg_action == "BUY":
+                # BUY leg: buy combo = pay ask, sell combo = receive bid
+                combo_ask += ask * ratio
+                combo_bid += bid * ratio
+            else:  # SELL
+                # SELL leg: buy combo = receive bid, sell combo = pay ask
+                combo_ask -= bid * ratio
+                combo_bid -= ask * ratio
+
+        return combo_bid, combo_ask
+
     async def _collect_orders(self) -> list[dict]:
         """Collect open orders with combo legs grouped together."""
         orders = []
@@ -630,6 +691,7 @@ class IbkrWebapp:
                     limit_price = order.lmtPrice if order.lmtPrice else 0.0
 
                     legs = []
+                    legs_for_bid_ask = []  # For calculating combo bid/ask
                     for leg in contract.comboLegs:
                         # Determine the effective side for this leg
                         # order.action is the overall combo action, leg.action modifies it
@@ -652,12 +714,24 @@ class IbkrWebapp:
                             "description": leg_desc,
                         })
 
+                        # For bid/ask calculation
+                        legs_for_bid_ask.append({
+                            "con_id": leg.conId,
+                            "action": leg.action,  # Use original leg action for calculation
+                            "ratio": leg.ratio,
+                        })
+
+                    # Calculate combo bid/ask
+                    combo_bid, combo_ask = self._calculate_combo_bid_ask(legs_for_bid_ask)
+
                     orders.append({
                         "legs": legs,
                         "limit_price": limit_price,
                         "is_credit": is_credit,
                         "status": self._abbreviate_status(trade.orderStatus.status),
                         "is_combo": True,
+                        "bid": combo_bid,
+                        "ask": combo_ask,
                     })
                 else:
                     # Regular single-leg order
@@ -679,6 +753,9 @@ class IbkrWebapp:
                     action = self._get_order_action(order.action, position_qty)
                     is_credit = order.action == "SELL"
 
+                    # Get bid/ask for single-leg order
+                    bid, ask = self._get_contract_bid_ask(contract.conId)
+
                     orders.append({
                         "legs": [{
                             "action": action,
@@ -689,6 +766,8 @@ class IbkrWebapp:
                         "is_credit": is_credit,
                         "status": self._abbreviate_status(trade.orderStatus.status),
                         "is_combo": False,
+                        "bid": bid,
+                        "ask": ask,
                     })
         except Exception as e:
             import traceback
@@ -990,6 +1069,15 @@ class IbkrWebapp:
                     self._store_bar_data(con_id, bars)
                     bars.updateEvent += lambda b, hasNewBar, cid=con_id: self._on_bar_update(cid, b, hasNewBar)
                     print(f"[Chart] Started historical bar stream for {contract.localSymbol or contract.symbol} ({con_id}) using {what_to_show}")
+
+                    # Also request market data for bid/ask
+                    try:
+                        ticker = self.ib.reqMktData(contract, snapshot=False, regulatorySnapshot=False)
+                        if ticker is not None:
+                            self._bid_ask_tickers[con_id] = ticker
+                    except Exception as e:
+                        print(f"[Chart] Could not get bid/ask ticker for {contract.localSymbol or contract.symbol}: {e}")
+
                     return True
 
             except Exception as e:
@@ -1013,6 +1101,7 @@ class IbkrWebapp:
 
             if ticker is not None:
                 self._bar_subscriptions[con_id] = ticker
+                self._bid_ask_tickers[con_id] = ticker  # Also store for bid/ask access
                 # Initialize with empty bar data - will build up over time
                 with self._bar_data_lock:
                     self._bar_data[con_id] = []
@@ -1022,6 +1111,8 @@ class IbkrWebapp:
                         "high": None,
                         "low": None,
                         "close": None,
+                        "volume": 0,
+                        "last_cumulative_volume": 0,
                     }
 
                 # Subscribe to ticker updates - will aggregate into 1-minute bars
@@ -1061,6 +1152,9 @@ class IbkrWebapp:
         current_minute = tick_time.replace(second=0, microsecond=0)
         minute_timestamp = int(current_minute.timestamp())
 
+        # Get volume from ticker (if available)
+        tick_volume = getattr(ticker, 'volume', 0) or 0
+
         with self._bar_data_lock:
             if con_id not in self._bar_aggregation:
                 self._bar_aggregation[con_id] = {
@@ -1069,6 +1163,8 @@ class IbkrWebapp:
                     "high": None,
                     "low": None,
                     "close": None,
+                    "volume": 0,
+                    "last_cumulative_volume": tick_volume,
                 }
 
             agg = self._bar_aggregation[con_id]
@@ -1083,6 +1179,7 @@ class IbkrWebapp:
                         "high": agg["high"],
                         "low": agg["low"],
                         "close": agg["close"],
+                        "volume": agg["volume"],
                     })
                     self._bar_data[con_id] = bar_data
 
@@ -1092,11 +1189,17 @@ class IbkrWebapp:
                 agg["high"] = price
                 agg["low"] = price
                 agg["close"] = price
+                agg["volume"] = 0
+                agg["last_cumulative_volume"] = tick_volume
             else:
                 # Same minute - update OHLC
                 agg["high"] = max(agg["high"], price) if agg["high"] else price
                 agg["low"] = min(agg["low"], price) if agg["low"] else price
                 agg["close"] = price
+                # Track volume delta (ticker.volume is cumulative for the day)
+                if tick_volume > agg.get("last_cumulative_volume", 0):
+                    agg["volume"] += tick_volume - agg["last_cumulative_volume"]
+                    agg["last_cumulative_volume"] = tick_volume
 
     def _store_bar_data(self, con_id: int, bars) -> None:
         """Convert BarDataList to our format and store thread-safely."""
@@ -1107,6 +1210,7 @@ class IbkrWebapp:
                 "high": bar.high,
                 "low": bar.low,
                 "close": bar.close,
+                "volume": getattr(bar, 'volume', 0) or 0,
             }
             for bar in bars
         ]
@@ -1142,6 +1246,17 @@ class IbkrWebapp:
                 if con_id in self._bar_aggregation:
                     del self._bar_aggregation[con_id]
 
+        # Also clean up bid/ask ticker if separate from bar subscription
+        if con_id in self._bid_ask_tickers:
+            ticker = self._bid_ask_tickers[con_id]
+            # Only cancel if it wasn't the same as bar subscription (already cancelled above)
+            if con_id not in self._bar_subscriptions or self._bar_subscriptions.get(con_id) != ticker:
+                try:
+                    self.ib.cancelMktData(ticker.contract)
+                except Exception:
+                    pass
+            del self._bid_ask_tickers[con_id]
+
     def _get_bar_data(self, con_id: int) -> list[dict]:
         """Get bar data for a contract (thread-safe, called from Flask).
 
@@ -1160,6 +1275,7 @@ class IbkrWebapp:
                     "high": agg["high"],
                     "low": agg["low"],
                     "close": agg["close"],
+                    "volume": agg.get("volume", 0),
                 })
 
             # Shift timestamps from UTC to local timezone
@@ -1180,6 +1296,7 @@ class IbkrWebapp:
             "high": bar["high"],
             "low": bar["low"],
             "close": bar["close"],
+            "volume": bar.get("volume", 0),
         }
 
     # -------------------------------------------------------------------------
