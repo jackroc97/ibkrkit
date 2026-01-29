@@ -3,20 +3,20 @@ from datetime import datetime
 import pandas as pd
 from ib_async import *
 
+from ibkrkit.ibkr_data_store import IbkrDataStore
+
 
 class IbkrDataStream:
     
-    def __init__(self, ib: IB, contract: Contract, on_update: callable = None) -> None:
+    def __init__(self, contract: Contract, on_update: callable = None) -> None:
         self.contract = contract
         self.on_update = on_update
-
-        self._ib = ib
         self._df = pd.DataFrame()
-        
-        
+
+
     @classmethod
-    async def create(cls, ib: IB, contract: Contract, on_update: callable = None) -> 'IbkrDataStream':
-        stream = cls(ib, contract, on_update)
+    async def create(cls, contract: Contract, on_update: callable = None) -> 'IbkrDataStream':
+        stream = cls(contract, on_update)
         await stream._start()
         return stream
         
@@ -25,8 +25,7 @@ class IbkrDataStream:
         print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Starting data stream for {self.contract.localSymbol}...")
         
         # Qualify the contract, request market data, and the default update handler
-        self.contract = (await self._ib.qualifyContractsAsync(self.contract))[0]
-        self._ticker = self._ib.reqMktData(self.contract, snapshot=False, regulatorySnapshot=False)
+        self._ticker = await IbkrDataStore.req_market_data_stream(self.contract)
         self._ticker.updateEvent += self._on_update
 
         # Add a custom update handler if provided

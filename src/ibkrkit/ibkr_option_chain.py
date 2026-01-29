@@ -5,26 +5,27 @@ from itertools import product
 
 import pandas as pd
 from ib_async import *
-    
+
+from ibkrkit.ibkr_data_store import IbkrDataStore
+
 
 class IbkrOptionChain:
     
-    def __init__(self, ib: IB, contract: Contract, max_strike_dist: float, max_dte: int, update_chain_interval: int, excluded_trading_classes: list[str]):
+    def __init__(self, contract: Contract, max_strike_dist: float, max_dte: int, update_chain_interval: int, excluded_trading_classes: list[str]):
         self.contract = contract
         self.max_strike_dist = max_strike_dist
         self.max_dte = max_dte
         self.update_chain_interval = update_chain_interval
         self.excluded_trading_classes = excluded_trading_classes
         self.started = False
-        
-        self._ib = ib
+
         self._chain_flat = pd.DataFrame()
         self._contract_tickers: dict[tuple, Ticker] = {}
         
         
     @classmethod
-    async def create(cls, ib: IB, contract: Contract, max_strike_dist: float = 100.0, max_dte: int = 10, update_chain_interval: int = 60, excluded_trading_classes: list[str] = []) -> 'IbkrOptionChain':
-        chain = cls(ib, contract, max_strike_dist, max_dte, update_chain_interval, excluded_trading_classes)
+    async def create(cls, contract: Contract, max_strike_dist: float = 100.0, max_dte: int = 10, update_chain_interval: int = 60, excluded_trading_classes: list[str] = []) -> 'IbkrOptionChain':
+        chain = cls(contract, max_strike_dist, max_dte, update_chain_interval, excluded_trading_classes)
         await chain._start()
         return chain
     
@@ -49,11 +50,11 @@ class IbkrOptionChain:
         
         print(f"Requesting options chain for {self.contract.symbol}, {self.contract.exchange}, {self.contract.secType}, {self.contract.conId}")
         
-        # Request the options chain from IBKR TWS 
-        chain = self._ib.reqSecDefOptParams(self.contract.symbol, 
-                                            self.contract.exchange, 
-                                            self.contract.secType, 
-                                            self.contract.conId)
+        # Request the options chain from IBKR TWS
+        chain = IbkrDataStore.req_sec_def_opt_params(self.contract.symbol,
+                                                     self.contract.exchange,
+                                                     self.contract.secType,
+                                                     self.contract.conId)
         
         print(f"Received options chain with {len(chain)} rows.")
         
@@ -70,7 +71,7 @@ class IbkrOptionChain:
         chain_flat = pd.DataFrame(rows)
         
         # Get last price of underlying in order to filter the options by strike distance
-        underlying_ticker = self._ib.reqMktData(self.contract, snapshot=True, regulatorySnapshot=False)
+        underlying_ticker = await IbkrDataStore.req_market_data_snapshot(self.contract)
         underlying_last = underlying_ticker.last
         
         # Filter the options chain based on max strike distance
@@ -133,8 +134,7 @@ class IbkrOptionChain:
         
     async def _fetch_option_ticker(self, contract: Contract) -> None:
         async with asyncio.timeout(15):
-            contract = (await self._ib.qualifyContractsAsync(contract))[0]
-            ticker = self._ib.reqMktData(contract, snapshot=False, regulatorySnapshot=False)
+            ticker = await IbkrDataStore.req_market_data_stream(contract)
             self._contract_tickers[(contract.lastTradeDateOrContractMonth, contract.strike, contract.right.lower())] = ticker
         
 
