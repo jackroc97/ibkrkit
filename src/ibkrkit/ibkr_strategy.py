@@ -45,15 +45,11 @@ class IbkrStrategy:
         day_stop_time: Optional[time] = None,
         tick_freq_seconds: int = 5,
         weekday_only: bool = True,
-        webapp: bool = False,
-        webapp_port: int = 5000
     ):
         self._day_start_time = day_start_time
         self._day_stop_time = day_stop_time
         self._tick_freq_seconds = tick_freq_seconds
         self._weekday_only = weekday_only
-        self._webapp_enabled = webapp
-        self._webapp_port = webapp_port
         asyncio.run(self._run(host, port, client_id, account_id=account_id))
 
 
@@ -62,13 +58,6 @@ class IbkrStrategy:
         self.ib.connect(host=host, port=port, clientId=client_id, account=account_id)
 
         self.now = datetime.now()
-
-        # Start webapp if enabled
-        self._webapp = None
-        if self._webapp_enabled:
-            from .ibkr_webapp import IbkrWebapp
-            self._webapp = IbkrWebapp(self.ib, self)
-            self._webapp.start(port=self._webapp_port)
 
         try:
             await self._call_strategy_init()
@@ -85,10 +74,6 @@ class IbkrStrategy:
                 # Check for mode transitions
                 await self._check_mode_transition()
 
-                # Update webapp data from the main event loop (thread-safe)
-                if self._webapp is not None:
-                    await self._webapp.collect_data()
-
                 # Only call tick when in live mode
                 if self._is_live:
                     await self.tick()
@@ -96,7 +81,6 @@ class IbkrStrategy:
                 else:
                     print(f"{self.now.strftime('%Y-%m-%d %H:%M:%S')} | Strategy is in sleep mode between {self._day_stop_time} and {self._day_start_time}")
                     await asyncio.sleep(self._tick_freq_seconds)
-                
 
         except Exception as e:
             print_exception(e)

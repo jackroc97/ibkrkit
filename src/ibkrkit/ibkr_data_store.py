@@ -36,5 +36,10 @@ class IbkrDataStore:
 
 
     @classmethod
+    def is_connected(cls) -> bool:
+        """Check if the data store has an active IB connection."""
+        return hasattr(cls, '_ib') and cls._ib is not None and cls._ib.isConnected()
+
+    @classmethod
     async def disconnect(cls) -> None:
         await cls._ib.disconnect()

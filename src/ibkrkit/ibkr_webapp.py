@@ -1,10 +1,11 @@
 """
-Flask-based webapp for displaying live strategy status.
+Flask-based webapp for displaying live trading status.
 
 Architecture:
+- IbkrWebapp runs standalone with its own IB connection
 - Data flows ONE direction: main event loop -> thread-safe store -> Flask
 - Flask NEVER calls ib_async methods directly (ib_async is not thread-safe)
-- The strategy's main event loop periodically updates the data store
+- The webapp's own data collection loop periodically updates the data store
 - Flask only reads from the pre-computed snapshots
 """
 
@@ -14,14 +15,11 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from flask import Flask, render_template, Response, jsonify
 
 from ib_async import IB, Option, FuturesOption, Future, Bag, Contract, ContractDetails
-
-if TYPE_CHECKING:
-    from .ibkr_strategy import IbkrStrategy
 
 
 @dataclass
@@ -32,7 +30,7 @@ class WebappDataStore:
     Flask reads from this store, never from ib_async directly.
     """
     _lock: threading.Lock = field(default_factory=threading.Lock)
-    _state: str = "Stopped"
+    _state: str = "Disconnected"
     _positions: list[dict] = field(default_factory=list)
     _orders: list[dict] = field(default_factory=list)
     _trades: list[dict] = field(default_factory=list)
@@ -69,16 +67,35 @@ class WebappDataStore:
 
 
 class IbkrWebapp:
-    """Flask-based webapp for displaying live strategy status."""
+    """Flask-based webapp for displaying live trading status.
 
-    def __init__(self, ib: IB, strategy: "IbkrStrategy"):
-        self.ib = ib
-        self.strategy = strategy
+    Runs standalone with its own IB connection. Can be used independently
+    of IbkrStrategy to monitor positions, orders, and trades.
+    """
+
+    def __init__(
+        self,
+        name: str = "IbkrWebapp",
+        version: str = "1.0.0",
+    ):
+        """Initialize the webapp.
+
+        Args:
+            name: Display name shown in the webapp header
+            version: Version string shown in the webapp header
+        """
+        self._name = name
+        self._version = version
+
+        # IB connection - created when start() is called
+        self.ib: IB | None = None
+
         self._data_store = WebappDataStore()
         self._contract_cache: dict[int, Any] = {}  # conId -> contract
         self._under_symbol_cache: dict[int, str] = {}  # conId -> underSymbol
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
+        self._data_collection_task: asyncio.Task | None = None
         self._running = False
         self._app = self._create_app()
 
@@ -103,8 +120,8 @@ class IbkrWebapp:
             snapshot = self._data_store.get_snapshot()
             return render_template(
                 "index.html",
-                strategy_name=getattr(self.strategy, "name", "Unknown Strategy"),
-                strategy_version=getattr(self.strategy, "version", "0.0.0"),
+                strategy_name=self._name,
+                strategy_version=self._version,
                 state=snapshot["state"],
                 positions=snapshot["positions"],
                 orders=snapshot["orders"],
@@ -169,12 +186,10 @@ class IbkrWebapp:
         self._data_store.update(state, positions, orders, trades, chart_contracts)
 
     def _compute_state(self) -> str:
-        """Compute current strategy state."""
-        if not self.ib.isConnected():
-            return "Stopped"
-        if self.strategy.is_live:
-            return "Live"
-        return "Sleep"
+        """Compute current connection state."""
+        if self.ib is None or not self.ib.isConnected():
+            return "Disconnected"
+        return "Connected"
 
     def _format_expiration(self, expiration: str) -> str:
         """Format expiration date like 'Jan 27' from '20260127' format."""
@@ -1363,8 +1378,50 @@ class IbkrWebapp:
     # Lifecycle
     # -------------------------------------------------------------------------
 
-    def start(self, port: int = 5000) -> None:
-        """Start the Flask webapp in a daemon thread."""
+    async def _data_collection_loop(self) -> None:
+        """Collect data periodically in the background.
+
+        This runs as an async task in the main event loop, collecting
+        positions, orders, trades, and chart data every 2 seconds.
+        """
+        while self._running:
+            try:
+                if self.ib is not None and self.ib.isConnected():
+                    await self.collect_data()
+            except Exception as e:
+                print(f"[Webapp] Error in data collection loop: {e}")
+            await asyncio.sleep(2)
+
+    def start(
+        self,
+        host: str,
+        port: int,
+        client_id: int,
+        webapp_port: int = 5000,
+    ) -> None:
+        """Start the webapp with its own IB connection.
+
+        This method connects to IB, starts the data collection loop,
+        and launches the Flask server in a daemon thread.
+
+        Args:
+            host: IB Gateway/TWS host address
+            port: IB Gateway/TWS port
+            client_id: Client ID for the IB connection (must be unique)
+            webapp_port: Port to run the Flask server on
+        """
+        import nest_asyncio
+        nest_asyncio.apply()
+
+        # Create and connect the IB instance
+        self.ib = IB()
+        self.ib.connect(
+            host=host,
+            port=port,
+            clientId=client_id,
+        )
+        print(f"[Webapp] Connected to IB at {host}:{port} with client ID {client_id}")
+
         # Capture the current event loop for async calls from Flask thread
         try:
             self._loop = asyncio.get_running_loop()
@@ -1372,6 +1429,9 @@ class IbkrWebapp:
             self._loop = asyncio.get_event_loop()
 
         self._running = True
+
+        # Start the data collection loop as an async task
+        self._data_collection_task = asyncio.ensure_future(self._data_collection_loop())
 
         def run_flask():
             # Suppress Flask's default logging for cleaner output
@@ -1381,7 +1441,7 @@ class IbkrWebapp:
 
             self._app.run(
                 host="0.0.0.0",
-                port=port,
+                port=webapp_port,
                 threaded=True,
                 use_reloader=False,
                 debug=False,
@@ -1389,12 +1449,22 @@ class IbkrWebapp:
 
         self._thread = threading.Thread(target=run_flask, daemon=True)
         self._thread.start()
-        print(f"Webapp started on http://localhost:{port}")
+        print(f"Webapp started on http://localhost:{webapp_port}")
 
     def stop(self) -> None:
         """Stop the webapp and clean up resources."""
         self._running = False
 
+        # Cancel data collection task
+        if self._data_collection_task is not None:
+            self._data_collection_task.cancel()
+            self._data_collection_task = None
+
         # Stop all bar data streams
         for con_id in list(self._bar_subscriptions.keys()):
             self._stop_bar_stream(con_id)
+
+        # Disconnect from IB
+        if self.ib is not None and self.ib.isConnected():
+            self.ib.disconnect()
+            print("[Webapp] Disconnected from IB")
