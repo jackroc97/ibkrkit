@@ -1,8 +1,5 @@
 import asyncio
-import nest_asyncio
-from datetime import datetime
 
-import pandas as pd
 from ib_async import *
 
 
@@ -11,7 +8,6 @@ class IbkrDataStore:
     @classmethod
     def connect(cls, host: str = '127.0.0.1', port: int = 7497, client_id: int = 1) -> None:
         cls._ib = IB()
-        #nest_asyncio.apply()
         cls._ib.connect(host, port, clientId=client_id)
         cls._market_data: dict[int, Ticker] = {}
         cls._lock = asyncio.Lock()

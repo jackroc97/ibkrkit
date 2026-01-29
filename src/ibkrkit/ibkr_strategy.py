@@ -1,5 +1,4 @@
 import asyncio
-import nest_asyncio
 import warnings
 
 from datetime import datetime, time
@@ -55,7 +54,6 @@ class IbkrStrategy:
         self._weekday_only = weekday_only
         self._webapp_enabled = webapp
         self._webapp_port = webapp_port
-        nest_asyncio.apply()
         asyncio.run(self._run(host, port, client_id, account_id=account_id))
 
 
