@@ -3,7 +3,7 @@ import asyncio
 from ib_async import IB
 
 
-async def wait_for_ibkr_ready(host="127.0.0.1", port=4004, retries=30, delay=5):
+async def wait_for_ibkr_ready(host="127.0.0.1", port=4004, client_id: int = 99, retries=30, delay=5):
     """
     Try connecting to the IBKR Gateway every `delay` seconds until successful
     or until `retries` are exhausted.
@@ -12,7 +12,7 @@ async def wait_for_ibkr_ready(host="127.0.0.1", port=4004, retries=30, delay=5):
     for attempt in range(1, retries + 1):
         try:
             print(f"Attempt {attempt}: Connecting to IBKR at {host}:{port}...")
-            await ib.connectAsync(host, port, clientId=99)
+            await ib.connectAsync(host, port, clientId=client_id)
             if ib.isConnected():
                 print("IBKR connection established and ready.")
                 ib.disconnect()

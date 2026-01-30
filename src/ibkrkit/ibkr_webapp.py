@@ -12,9 +12,9 @@ Architecture:
 import asyncio
 import json
 import threading
-import time
+import time as time_module
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, time, timezone
 from typing import Any
 
 from flask import Flask, render_template, Response, jsonify
@@ -35,10 +35,11 @@ class WebappDataStore:
     _orders: list[dict] = field(default_factory=list)
     _trades: list[dict] = field(default_factory=list)
     _chart_contracts: list[dict] = field(default_factory=list)
+    _account_summary: dict = field(default_factory=dict)
     _last_updated: str = ""
 
     def update(self, state: str, positions: list, orders: list,
-               trades: list, chart_contracts: list) -> None:
+               trades: list, chart_contracts: list, account_summary: dict = None) -> None:
         """Update all data atomically (called from main event loop)."""
         with self._lock:
             self._state = state
@@ -46,6 +47,7 @@ class WebappDataStore:
             self._orders = orders
             self._trades = trades
             self._chart_contracts = chart_contracts
+            self._account_summary = account_summary or {}
             self._last_updated = datetime.now().strftime("%H:%M:%S")
 
     def get_snapshot(self) -> dict:
@@ -57,6 +59,7 @@ class WebappDataStore:
                 "orders": list(self._orders),
                 "trades": list(self._trades),
                 "chart_contracts": list(self._chart_contracts),
+                "account_summary": dict(self._account_summary),
                 "last_updated": self._last_updated,
             }
 
@@ -111,6 +114,10 @@ class IbkrWebapp:
         # Breakeven data for chart price lines (thread-safe access required)
         self._breakevens: dict[int, list[dict]] = {}  # underlying conId -> list of breakeven info
 
+        # Day start/stop times for sleeping state (set via start())
+        self._day_start_time: time | None = None
+        self._day_stop_time: time | None = None
+
     def _create_app(self) -> Flask:
         """Create and configure the Flask application."""
         app = Flask(__name__, template_folder="templates")
@@ -127,6 +134,7 @@ class IbkrWebapp:
                 orders=snapshot["orders"],
                 trades=snapshot["trades"],
                 chart_contracts=snapshot["chart_contracts"],
+                account_summary=snapshot["account_summary"],
                 last_updated=snapshot["last_updated"] or datetime.now().strftime("%H:%M:%S"),
             )
 
@@ -138,7 +146,7 @@ class IbkrWebapp:
                     # Just read from the thread-safe data store
                     snapshot = self._data_store.get_snapshot()
                     yield f"data: {json.dumps(snapshot)}\n\n"
-                    time.sleep(2)
+                    time_module.sleep(2)
 
             return Response(
                 generate(),
@@ -175,6 +183,7 @@ class IbkrWebapp:
         It's safe to call ib_async methods here.
         """
         state = self._compute_state()
+        account_summary = self._collect_account_summary()
         positions = await self._collect_positions()
         orders = await self._collect_orders()
         trades = await self._collect_trades()
@@ -183,13 +192,60 @@ class IbkrWebapp:
         # Calculate breakevens for options positions (for chart price lines)
         await self._collect_breakevens()
 
-        self._data_store.update(state, positions, orders, trades, chart_contracts)
+        self._data_store.update(state, positions, orders, trades, chart_contracts, account_summary)
 
     def _compute_state(self) -> str:
         """Compute current connection state."""
         if self.ib is None or not self.ib.isConnected():
             return "Disconnected"
+
+        # Check if we're in the sleeping period (outside day_start_time to day_stop_time)
+        if self._day_start_time is not None and self._day_stop_time is not None:
+            now = datetime.now().time()
+            # Handle normal case (start < stop, e.g., 9:30 to 16:00)
+            if self._day_start_time <= self._day_stop_time:
+                if not (self._day_start_time <= now <= self._day_stop_time):
+                    return "Sleeping"
+            else:
+                # Handle overnight case (start > stop, e.g., 18:00 to 05:00)
+                if not (now >= self._day_start_time or now <= self._day_stop_time):
+                    return "Sleeping"
+
         return "Connected"
+
+    def _collect_account_summary(self) -> dict:
+        """Collect account summary values from IB.
+
+        Returns:
+            Dict with account values for display.
+        """
+        summary = {
+            "account_number": "",
+            "net_liquidation": 0.0,
+            "buying_power": 0.0,
+            "init_margin": 0.0,
+            "maint_margin": 0.0,
+            "excess_liquidity": 0.0,
+        }
+
+        try:
+            for av in self.ib.accountValues():
+                if av.tag == "AccountCode":
+                    summary["account_number"] = av.value
+                elif av.tag == "NetLiquidation" and av.currency == "USD":
+                    summary["net_liquidation"] = float(av.value)
+                elif av.tag == "BuyingPower" and av.currency == "USD":
+                    summary["buying_power"] = float(av.value)
+                elif av.tag == "InitMarginReq" and av.currency == "USD":
+                    summary["init_margin"] = float(av.value)
+                elif av.tag == "MaintMarginReq" and av.currency == "USD":
+                    summary["maint_margin"] = float(av.value)
+                elif av.tag == "ExcessLiquidity" and av.currency == "USD":
+                    summary["excess_liquidity"] = float(av.value)
+        except Exception:
+            pass
+
+        return summary
 
     def _format_expiration(self, expiration: str) -> str:
         """Format expiration date like 'Jan 27' from '20260127' format."""
@@ -373,65 +429,60 @@ class IbkrWebapp:
 
             return f"{arrow} {'/'.join(parts)} {arrow}"
 
+        # Breakeven formulas (works for both credit and debit spreads):
+        # - Call spread BE = Lowest strike + |net premium|
+        # - Put spread BE = Highest strike - |net premium|
+        #
+        # For straddles/strangles, we use total premium for both sides.
+        # For iron condors or separate spreads, we calculate each side independently.
+
         if calls and puts:
             # Mixed position - could be straddle/strangle or iron condor
             calls_same_dir = call_has_long != call_has_short  # XOR - all long or all short
             puts_same_dir = put_has_long != put_has_short
 
-            if calls_same_dir and puts_same_dir:
-                # Straddle/strangle type - use total premium for both BEs
-                # Upper BE from calls
-                call_strike = min(o['strike'] for o in calls)
+            if calls_same_dir and puts_same_dir and not (call_has_long != put_has_long):
+                # Straddle/strangle type (both sides same direction) - use total premium
+                # Call side BE
+                call_anchor = min(o['strike'] for o in calls)
                 breakevens.append({
-                    'price': call_strike + abs(total_premium),
+                    'price': call_anchor + abs(total_premium),
                     'label': make_label(calls, is_call_based=True, premium=total_premium),
                 })
-                # Lower BE from puts
-                put_strike = max(o['strike'] for o in puts)
+                # Put side BE
+                put_anchor = max(o['strike'] for o in puts)
                 breakevens.append({
-                    'price': put_strike - abs(total_premium),
+                    'price': put_anchor - abs(total_premium),
                     'label': make_label(puts, is_call_based=False, premium=total_premium),
                 })
             else:
-                # Iron condor type - calculate per side
+                # Iron condor or mixed - calculate each side independently
                 if calls:
-                    if call_has_short:
-                        call_anchor = min(o['strike'] for o in calls if o['quantity'] < 0)
-                    else:
-                        call_anchor = min(o['strike'] for o in calls)
+                    call_anchor = min(o['strike'] for o in calls)
                     breakevens.append({
                         'price': call_anchor + abs(call_premium),
                         'label': make_label(calls, is_call_based=True, premium=call_premium),
                     })
                 if puts:
-                    if put_has_short:
-                        put_anchor = max(o['strike'] for o in puts if o['quantity'] < 0)
-                    else:
-                        put_anchor = max(o['strike'] for o in puts)
+                    put_anchor = max(o['strike'] for o in puts)
                     breakevens.append({
                         'price': put_anchor - abs(put_premium),
                         'label': make_label(puts, is_call_based=False, premium=put_premium),
                     })
 
         elif calls:
-            # Call spread only
-            if call_has_long:
-                anchor = min(o['strike'] for o in calls if o['quantity'] > 0)
-            else:
-                anchor = min(o['strike'] for o in calls)
+            # Call spread: BE = Lowest strike + |net premium|
+            call_anchor = min(o['strike'] for o in calls)
             breakevens.append({
-                'price': anchor + call_premium,
+                'price': call_anchor + abs(call_premium),
                 'label': make_label(calls, is_call_based=True, premium=call_premium),
             })
 
         elif puts:
-            # Put spread only
-            if put_has_long:
-                anchor = max(o['strike'] for o in puts if o['quantity'] > 0)
-            else:
-                anchor = max(o['strike'] for o in puts)
+            # Put spread: BE = Highest strike - |net premium|
+            put_anchor = max(o['strike'] for o in puts)
             breakevens.append({
-                'price': anchor - put_premium,
+                'price': put_anchor - abs(put_premium),
                 'label': make_label(puts, is_call_based=False, premium=put_premium),
             })
 
@@ -823,7 +874,16 @@ class IbkrWebapp:
                 fills.sort(key=lambda f: f.time)
                 first_fill = fills[0]
                 fill_time = first_fill.time
-                time_str = fill_time.strftime("%Y-%m-%d %H:%M:%S")
+
+                # Convert to local timezone if the time is timezone-aware (IB returns UTC)
+                if fill_time.tzinfo is not None:
+                    fill_time_local = fill_time.astimezone()
+                else:
+                    # Assume UTC if no timezone info, convert to local
+                    fill_time_local = fill_time.replace(tzinfo=timezone.utc).astimezone()
+
+                time_str = fill_time_local.strftime("%Y-%m-%d %H:%M:%S")
+                exec_time_str = fill_time_local.strftime("%b %d %H:%M:%S")
 
                 legs = []
                 total_credit = 0.0  # Track net credit/debit
@@ -909,6 +969,7 @@ class IbkrWebapp:
 
                 trades.append({
                     "time_sort": time_str,
+                    "exec_time": exec_time_str,
                     "legs": legs,
                     "fill_price": fill_price,
                     "is_credit": is_credit,
@@ -1398,6 +1459,8 @@ class IbkrWebapp:
         port: int,
         client_id: int,
         webapp_port: int = 5000,
+        day_start_time: time | None = None,
+        day_stop_time: time | None = None,
     ) -> None:
         """Start the webapp with its own IB connection.
 
@@ -1409,7 +1472,11 @@ class IbkrWebapp:
             port: IB Gateway/TWS port
             client_id: Client ID for the IB connection (must be unique)
             webapp_port: Port to run the Flask server on
+            day_start_time: When live mode starts (displays "Sleeping" outside this window)
+            day_stop_time: When live mode ends (displays "Sleeping" outside this window)
         """
+        self._day_start_time = day_start_time
+        self._day_stop_time = day_stop_time
         import nest_asyncio
         nest_asyncio.apply()
 

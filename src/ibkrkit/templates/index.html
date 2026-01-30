@@ -105,7 +105,7 @@
                 {{ strategy_name }} <small class="text-muted fw-light">Version {{ strategy_version }}</small>
             </div>
             <div class="col-4 my-auto text-end">
-                <span id="status-badge" class="badge fs-6 {% if state == 'Connected' %}badge-lwc-up{% else %}badge-lwc-down{% endif %} my-auto text-uppercase">{{ state }}</span>
+                <span id="status-badge" class="badge fs-6 {% if state == 'Connected' %}badge-lwc-up{% elif state == 'Sleeping' %}bg-warning text-dark{% else %}badge-lwc-down{% endif %} my-auto text-uppercase">{{ state }}</span>
             </div>
         </header>
 
@@ -136,25 +136,25 @@
 
                 <h5 class="mb-3">Positions</h5>
                 <div id="positions-container" class="card overflow-hidden mb-3 overflow-x-auto">
-                    <table class="table mb-0 text-nowrap">
+                    <table class="table mb-0 text-nowrap" width="100%">
                         <thead>
                             <tr>
-                                <th class="py-1 bg-light-subtle text-secondary text-left text-uppercase" colspan="3">Position / Symbol</th>
-                                <th class="py-1 bg-light-subtle text-secondary text-center text-uppercase text-nowrap">Entry Price</th>
-                                <th class="py-1 bg-light-subtle text-secondary text-end text-uppercase">PnL</th>
+                                <th class="py-1 bg-light-subtle text-secondary text-left text-uppercase" colspan="3" width="50%">Position / Symbol</th>
+                                <th class="py-1 bg-light-subtle text-secondary text-center text-uppercase text-nowrap" width="25%">Ent Price</th>
+                                <th class="py-1 bg-light-subtle text-secondary text-end text-uppercase" width="25%">PnL</th>
                             </tr>
                         </thead>
                         <tbody id="positions-body">
                             {% if positions %}
                                 {% for pos in positions %}
                                 <tr>
-                                    <td class="text-end {% if loop.last %}border-bottom-0{% endif %}" style="width: 0px">
+                                    <td class="text-end {% if loop.last %}border-bottom-0{% endif %}" width="0%">
                                         <span class="badge bg-secondary">{% if pos.quantity < 0 %}SHO{% else %}LON{% endif %}</span>
                                     </td>
-                                    <td class="text-end {% if loop.last %}border-bottom-0{% endif %}" style="width: 0px">{{ pos.quantity|abs }}</td>
-                                    <td class="text-left {% if loop.last %}border-bottom-0{% endif %}" style="width: 50%">{{ pos.description }}</td>
-                                    <td class="text-center text-nowrap {% if loop.last %}border-bottom-0{% endif %}">{{ "%.2f"|format(pos.avg_cost|abs) }} {% if pos.is_credit %}cr{% else %}db{% endif %}</td>
-                                    <td class="text-end {% if loop.last %}border-bottom-0{% endif %}">
+                                    <td class="text-end {% if loop.last %}border-bottom-0{% endif %}" width="0%">{{ pos.quantity|abs }}</td>
+                                    <td class="text-left {% if loop.last %}border-bottom-0{% endif %}" width="50%">{{ pos.description }}</td>
+                                    <td class="text-center text-nowrap {% if loop.last %}border-bottom-0{% endif %}" width="25%">{{ "%.2f"|format(pos.avg_cost|abs) }} {% if pos.is_credit %}cr{% else %}db{% endif %}</td>
+                                    <td class="text-end {% if loop.last %}border-bottom-0{% endif %}" width="25%">
                                         <span class="{% if pos.pnl >= 0 %}text-lwc-up{% else %}text-lwc-down{% endif %} fw-bold text-uppercase">${{ "%.2f"|format(pos.pnl|abs) }}</span>
                                     </td>
                                 </tr>
@@ -170,37 +170,37 @@
 
                 <h5 class="mb-3">Open Orders</h5>
                 <div id="orders-container" class="card overflow-hidden mb-3 overflow-x-auto">
-                    <table class="table mb-0 text-nowrap">
+                    <table class="table mb-0 text-nowrap" width="100%">
                         <thead>
                             <tr>
-                                <th class="py-1 text-secondary bg-light-subtle text-left text-uppercase" colspan="3">Action / Qty / Symbol</th>
-                                <th class="py-1 text-secondary bg-light-subtle text-center text-uppercase text-nowrap">Lmt Price</th>
-                                <th class="py-1 text-secondary bg-light-subtle text-end text-uppercase">Bid/Ask</th>
+                                <th class="py-1 text-secondary bg-light-subtle text-left text-uppercase" colspan="3" width="50%">Action / Qty / Symbol</th>
+                                <th class="py-1 text-secondary bg-light-subtle text-center text-uppercase text-nowrap" width="25%">Lmt Price</th>
+                                <th class="py-1 text-secondary bg-light-subtle text-end text-uppercase" width="25%">Bid / Ask</th>
                             </tr>
                         </thead>
                         <tbody id="orders-body">
                             {% if orders %}
                                 {% for order in orders %}
                                 <tr>
-                                    <td class="text-end align-middle {% if loop.last %}border-bottom-0{% endif %}" style="width: 0px">
+                                    <td class="text-end align-middle {% if loop.last %}border-bottom-0{% endif %}" width="0%">
                                         {% for leg in order.legs %}
                                         <span class="badge bg-secondary">{{ leg.action }}</span>{% if not loop.last %}<br>{% endif %}
                                         {% endfor %}
                                     </td>
-                                    <td class="text-end align-middle {% if loop.last %}border-bottom-0{% endif %}" style="width: 0px">
+                                    <td class="text-end align-middle {% if loop.last %}border-bottom-0{% endif %}" width="0%">
                                         {% for leg in order.legs %}
                                         {{ leg.quantity }}{% if not loop.last %}<br>{% endif %}
                                         {% endfor %}
                                     </td>
-                                    <td class="text-left align-middle {% if loop.last %}border-bottom-0{% endif %}" style="width: 50%">
+                                    <td class="text-left align-middle {% if loop.last %}border-bottom-0{% endif %}" width="50%">
                                         {% for leg in order.legs %}
                                         {{ leg.description }}{% if not loop.last %}<br>{% endif %}
                                         {% endfor %}
                                     </td>
-                                    <td class="text-center align-middle text-nowrap {% if loop.last %}border-bottom-0{% endif %}">
+                                    <td class="text-center align-middle text-nowrap {% if loop.last %}border-bottom-0{% endif %}" width="25%">
                                         {% if order.limit_price %}{{ "%.2f"|format(order.limit_price|abs) }} {% if order.is_credit %}cr{% else %}db{% endif %}{% endif %}
                                     </td>
-                                    <td class="text-end align-middle {% if loop.last %}border-bottom-0{% endif %}">
+                                    <td class="text-end align-middle {% if loop.last %}border-bottom-0{% endif %}" width="25%">
                                         {% if order.bid is not none and order.ask is not none %}
                                         <span class="text-secondary fw-bold">{{ "%.2f"|format(order.bid) }} / {{ "%.2f"|format(order.ask) }}</span>
                                         {% else %}
@@ -220,37 +220,38 @@
 
                 <h5 class="mb-3">Filled Orders</h5>
                 <div id="trades-container" class="card overflow-hidden mb-3 overflow-x-auto">
-                    <table class="table mb-0 text-nowrap">
+                    <table class="table mb-0 text-nowrap" width="100%">
                         <thead>
                             <tr>
-                                <th class="py-1 bg-light-subtle text-secondary text-left text-uppercase" colspan="3">Action / Qty / Symbol</th>
-                                <th class="py-1 bg-light-subtle text-secondary text-center text-uppercase text-nowrap">Fill Price</th>
-                                <th class="py-1 bg-light-subtle text-secondary text-end text-uppercase">PnL</th>
+                                <th class="py-1 bg-light-subtle text-secondary text-left text-uppercase" colspan="3" width="50%">Action / Qty / Symbol</th>
+                                <th class="py-1 bg-light-subtle text-secondary text-center text-uppercase text-nowrap" width="16.66%">Fill Price</th>
+                                <th class="py-1 bg-light-subtle text-secondary text-center text-uppercase" width="16.66%">PnL</th>
+                                <th class="py-1 bg-light-subtle text-secondary text-end text-uppercase" width="16.66%">Exec Time</th>
                             </tr>
                         </thead>
                         <tbody id="trades-body">
                             {% if trades %}
                                 {% for trade in trades %}
                                 <tr>
-                                    <td class="text-end align-middle {% if loop.last %}border-bottom-0{% endif %}" style="width: 0px">
+                                    <td class="text-end align-middle {% if loop.last %}border-bottom-0{% endif %}" width="0%">
                                         {% for leg in trade.legs %}
                                         <span class="badge bg-secondary">{{ leg.action }}</span>{% if not loop.last %}<br>{% endif %}
                                         {% endfor %}
                                     </td>
-                                    <td class="text-end align-middle {% if loop.last %}border-bottom-0{% endif %}" style="width: 0px">
+                                    <td class="text-end align-middle {% if loop.last %}border-bottom-0{% endif %}" width="0%">
                                         {% for leg in trade.legs %}
                                         {{ leg.quantity }}{% if not loop.last %}<br>{% endif %}
                                         {% endfor %}
                                     </td>
-                                    <td class="text-left align-middle {% if loop.last %}border-bottom-0{% endif %}" style="width: 50%">
+                                    <td class="text-left align-middle {% if loop.last %}border-bottom-0{% endif %}" width="50%">
                                         {% for leg in trade.legs %}
                                         {{ leg.description }}{% if not loop.last %}<br>{% endif %}
                                         {% endfor %}
                                     </td>
-                                    <td class="text-center align-middle text-nowrap {% if loop.last %}border-bottom-0{% endif %}">
+                                    <td class="text-center align-middle text-nowrap {% if loop.last %}border-bottom-0{% endif %}" width="16.66%">
                                         {% if trade.is_expiration %}-.-- db{% else %}{{ "%.2f"|format(trade.fill_price|abs) }} {% if trade.is_credit %}cr{% else %}db{% endif %}{% endif %}
                                     </td>
-                                    <td class="text-end align-middle {% if loop.last %}border-bottom-0{% endif %}">
+                                    <td class="text-center align-middle {% if loop.last %}border-bottom-0{% endif %}" width="16.66%">
                                         {% if trade.is_expiration and trade.pnl is none %}
                                         <span class="text-secondary fw-bold text-uppercase">UNKWN</span>
                                         {% elif trade.pnl is none %}
@@ -261,18 +262,71 @@
                                         <span class="text-lwc-down fw-bold text-uppercase">${{ "%.2f"|format(trade.pnl|abs) }}</span>
                                         {% endif %}
                                     </td>
+                                    <td class="text-end align-middle {% if loop.last %}border-bottom-0{% endif %}" width="16.66%">
+                                        <span class="fw-bold text-secondary">{{ trade.exec_time }}</span>
+                                    </td>
                                 </tr>
                                 {% endfor %}
                             {% else %}
                                 <tr>
-                                    <td colspan="5" class="text-center text-secondary border-bottom-0">No filled orders in this session</td>
+                                    <td colspan="6" class="text-center text-secondary border-bottom-0">No filled orders in this session</td>
                                 </tr>
                             {% endif %}
                         </tbody>
                     </table>
                 </div>
 
-                <!-- Live Indicator -->
+                <h5>Account Summary</h5>
+                <div class="card overflow-hidden mb-3 overflow-x-auto">
+                    <table class="table mb-0 text-nowrap">
+                        <thead>
+                            <tr>
+                                <th class="py-1 bg-light-subtle text-secondary text-left text-uppercase">Name</th>
+                                <th class="py-1 bg-light-subtle text-secondary text-end text-uppercase">Value</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td class="text-left">Account Number</td>
+                                <td class="text-end">
+                                    <span id="acct-number" class="fw-bold text-secondary">{{ account_summary.account_number or '--' }}</span>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td class="text-left">Net Liquidation Value</td>
+                                <td class="text-end">
+                                    <span id="acct-net-liq" class="fw-bold text-secondary">${{ "{:,.2f}".format(account_summary.net_liquidation or 0) }}</span>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td class="text-left">Buying Power</td>
+                                <td class="text-end">
+                                    <span id="acct-buying-power" class="fw-bold text-secondary">${{ "{:,.0f}".format(account_summary.buying_power or 0) }}</span>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td class="text-left">Initial Margin</td>
+                                <td class="text-end">
+                                    <span id="acct-init-margin" class="fw-bold text-secondary">${{ "{:,.2f}".format(account_summary.init_margin or 0) }}</span>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td class="text-left">Maintenance Margin</td>
+                                <td class="text-end">
+                                    <span id="acct-maint-margin" class="fw-bold text-secondary">${{ "{:,.2f}".format(account_summary.maint_margin or 0) }}</span>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td class="text-left border-bottom-0">Excess Liquidity</td>
+                                <td class="text-end border-bottom-0">
+                                    <span id="acct-excess-liq" class="fw-bold text-secondary">${{ "{:,.2f}".format(account_summary.excess_liquidity or 0) }}</span>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Live Indicator --> 
                 <div class="text-center text-secondary small mt-3">
                     <span class="live-indicator"></span>Live updates | Last: <span id="last-updated">{{ last_updated }}</span>
                 </div>
@@ -581,6 +635,8 @@
         badge.className = 'badge fs-6 my-auto text-uppercase ';
         if (state === 'Connected') {
             badge.classList.add('badge-lwc-up');
+        } else if (state === 'Sleeping') {
+            badge.classList.add('bg-warning', 'text-dark');
         } else {
             badge.classList.add('badge-lwc-down');
         }
@@ -690,7 +746,7 @@
     function renderTrades(trades) {
         const tbody = document.getElementById('trades-body');
         if (!trades || trades.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-secondary border-bottom-0">No filled orders in this session</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="6" class="text-center text-secondary border-bottom-0">No filled orders in this session</td></tr>';
             return;
         }
         let html = '';
@@ -715,16 +771,36 @@
             }
 
             const fillPriceHtml = trade.is_expiration ? '-.-- db' : `${Math.abs(trade.fill_price).toFixed(2)} ${crDb}`;
+            const execTimeHtml = trade.exec_time || '--';
 
             html += `<tr>
                 <td class="text-end align-middle ${borderClass}" style="width: 0px">${actionsHtml}</td>
                 <td class="text-end align-middle ${borderClass}" style="width: 0px">${qtysHtml}</td>
                 <td class="text-left align-middle ${borderClass}" style="width: 50%">${descsHtml}</td>
                 <td class="text-center align-middle text-nowrap ${borderClass}">${fillPriceHtml}</td>
-                <td class="text-end align-middle ${borderClass}">${pnlHtml}</td>
+                <td class="text-center align-middle ${borderClass}">${pnlHtml}</td>
+                <td class="text-end align-middle ${borderClass}"><span class="fw-bold text-secondary">${execTimeHtml}</span></td>
             </tr>`;
         });
         tbody.innerHTML = html;
+    }
+
+    function renderAccountSummary(summary) {
+        if (!summary) return;
+
+        const formatCurrency = (val, decimals = 2) => '$' + (val || 0).toLocaleString('en-US', {
+            minimumFractionDigits: decimals,
+            maximumFractionDigits: decimals
+        });
+
+        const el = (id) => document.getElementById(id);
+
+        if (el('acct-number')) el('acct-number').textContent = summary.account_number || '--';
+        if (el('acct-net-liq')) el('acct-net-liq').textContent = formatCurrency(summary.net_liquidation);
+        if (el('acct-buying-power')) el('acct-buying-power').textContent = formatCurrency(summary.buying_power, 0);
+        if (el('acct-init-margin')) el('acct-init-margin').textContent = formatCurrency(summary.init_margin);
+        if (el('acct-maint-margin')) el('acct-maint-margin').textContent = formatCurrency(summary.maint_margin);
+        if (el('acct-excess-liq')) el('acct-excess-liq').textContent = formatCurrency(summary.excess_liquidity);
     }
 
     // Connect to Server-Sent Events for live updates
@@ -733,6 +809,7 @@
     eventSource.onmessage = function(event) {
         const data = JSON.parse(event.data);
         updateStatus(data.state);
+        renderAccountSummary(data.account_summary);
         renderPositions(data.positions);
         renderOrders(data.orders);
         renderTrades(data.trades);
