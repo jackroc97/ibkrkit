@@ -722,8 +722,7 @@ class IbkrWebapp:
                     position_map[pos.contract.conId] = pos.position
 
             # Request all open orders from all clientIds (not just this connection)
-            await self.ib.reqAllOpenOrdersAsync()
-            open_trades = self.ib.openTrades()
+            open_trades = await self.ib.reqAllOpenOrdersAsync()
 
             # Filter to only include truly open orders (not filled, cancelled, etc.)
             active_statuses = {"Submitted", "PreSubmitted", "PendingSubmit", "ApiPending"}
