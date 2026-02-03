@@ -1026,9 +1026,26 @@ class IbkrWebapp:
                     if contract.comboLegs:
                         for leg in contract.comboLegs:
                             leg_contract = self._contract_cache.get(leg.conId)
-                            if leg_contract:
-                                needed_con_ids.add(leg.conId)
-                                contracts_to_stream[leg.conId] = leg_contract
+                            if not leg_contract:
+                                # Leg not in cache - qualify it from the conId
+                                leg_contract = Contract(conId=leg.conId)
+                                qualified = await self.ib.qualifyContractsAsync(leg_contract)
+                                if qualified:
+                                    leg_contract = qualified[0]
+                                    self._contract_cache[leg.conId] = leg_contract
+                                else:
+                                    continue  # Couldn't qualify, skip this leg
+
+                            needed_con_ids.add(leg.conId)
+                            contracts_to_stream[leg.conId] = leg_contract
+
+                            # For options, also need the underlying
+                            if isinstance(leg_contract, (Option, FuturesOption)):
+                                underlying = await self._get_underlying_contract(leg_contract)
+                                if underlying and underlying.conId:
+                                    self._contract_cache[underlying.conId] = underlying
+                                    needed_con_ids.add(underlying.conId)
+                                    contracts_to_stream[underlying.conId] = underlying
                 else:
                     self._contract_cache[contract.conId] = contract
                     needed_con_ids.add(contract.conId)
