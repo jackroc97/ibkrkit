@@ -22,7 +22,7 @@ class IbkrDataStream:
         
     
     async def _start(self) -> None:
-        print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Starting data stream for {self.contract.localSymbol}...")
+        print(f"Starting data stream for {self.contract.localSymbol}...")
         
         # Qualify the contract, request market data, and the default update handler
         self._ticker = await IbkrDataStore.req_market_data_stream(self.contract)
@@ -39,7 +39,7 @@ class IbkrDataStream:
             if (datetime.now() - t).seconds > 30:
                 raise TimeoutError("Timeout waiting for initial market data.")
         
-        print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Data stream for {self.contract.localSymbol} started.")    
+        print(f"Data stream for {self.contract.localSymbol} started.")    
                                 
     
     def get(self, name: str, at_time: datetime = None, bars_ago: int = None) -> any:

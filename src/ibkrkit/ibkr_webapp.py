@@ -10,9 +10,12 @@ Architecture:
 """
 
 import asyncio
+import io
 import json
+import sys
 import threading
 import time as time_module
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, time, timezone
 from typing import Any
@@ -20,6 +23,39 @@ from typing import Any
 from flask import Flask, render_template, Response, jsonify
 
 from ib_async import IB, Option, FuturesOption, Future, Bag, Contract, ContractDetails
+
+
+class OutputCapture(io.TextIOBase):
+    """Captures stdout/stderr to a thread-safe buffer while preserving original output.
+
+    Each line is stored with a timestamp for display in the webapp.
+    """
+
+    def __init__(self, original_stream, buffer: deque, lock: threading.Lock):
+        self._original = original_stream
+        self._buffer = buffer
+        self._lock = lock
+
+    def write(self, text: str) -> int:
+        # Always write to original stream
+        result = self._original.write(text)
+
+        # Store non-empty lines in buffer with timestamp
+        if text.strip():
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            with self._lock:
+                self._buffer.append({"time": timestamp, "text": text.rstrip()})
+
+        return result
+
+    def flush(self):
+        self._original.flush()
+
+    def fileno(self):
+        return self._original.fileno()
+
+    def isatty(self):
+        return self._original.isatty()
 
 
 @dataclass
@@ -37,6 +73,8 @@ class WebappDataStore:
     _chart_contracts: list[dict] = field(default_factory=list)
     _account_summary: dict = field(default_factory=dict)
     _last_updated: str = ""
+    _console_logs: deque = field(default_factory=lambda: deque(maxlen=100))
+    _console_lock: threading.Lock = field(default_factory=threading.Lock)
 
     def update(self, state: str, positions: list, orders: list,
                trades: list, chart_contracts: list, account_summary: dict = None) -> None:
@@ -53,6 +91,8 @@ class WebappDataStore:
     def get_snapshot(self) -> dict:
         """Get a consistent snapshot of all data (called from Flask thread)."""
         with self._lock:
+            with self._console_lock:
+                console_logs = list(self._console_logs)
             return {
                 "state": self._state,
                 "positions": list(self._positions),
@@ -61,6 +101,7 @@ class WebappDataStore:
                 "chart_contracts": list(self._chart_contracts),
                 "account_summary": dict(self._account_summary),
                 "last_updated": self._last_updated,
+                "console_logs": console_logs,
             }
 
     def get_state(self) -> str:
@@ -135,6 +176,7 @@ class IbkrWebapp:
                 trades=snapshot["trades"],
                 chart_contracts=snapshot["chart_contracts"],
                 account_summary=snapshot["account_summary"],
+                console_logs=snapshot["console_logs"],
                 last_updated=snapshot["last_updated"] or datetime.now().strftime("%H:%M:%S"),
             )
 
@@ -1491,6 +1533,20 @@ class IbkrWebapp:
             day_start_time: When live mode starts (displays "Sleeping" outside this window)
             day_stop_time: When live mode ends (displays "Sleeping" outside this window)
         """
+        # Set up output capture to display console logs in the webapp
+        self._original_stdout = sys.stdout
+        self._original_stderr = sys.stderr
+        sys.stdout = OutputCapture(
+            sys.stdout,
+            self._data_store._console_logs,
+            self._data_store._console_lock
+        )
+        sys.stderr = OutputCapture(
+            sys.stderr,
+            self._data_store._console_logs,
+            self._data_store._console_lock
+        )
+
         self._day_start_time = day_start_time
         self._day_stop_time = day_stop_time
         import nest_asyncio
@@ -1551,3 +1607,9 @@ class IbkrWebapp:
         if self.ib is not None and self.ib.isConnected():
             self.ib.disconnect()
             print("[Webapp] Disconnected from IB")
+
+        # Restore original stdout/stderr
+        if hasattr(self, '_original_stdout') and self._original_stdout:
+            sys.stdout = self._original_stdout
+        if hasattr(self, '_original_stderr') and self._original_stderr:
+            sys.stderr = self._original_stderr

@@ -79,7 +79,7 @@ class IbkrStrategy:
                     await self.tick()
                     await asyncio.sleep(self._tick_freq_seconds)
                 else:
-                    print(f"{self.now.strftime('%Y-%m-%d %H:%M:%S')} | Strategy is in sleep mode between {self._day_stop_time} and {self._day_start_time}")
+                    print(f"Strategy is in sleep mode between {self._day_stop_time} and {self._day_start_time}")
                     await asyncio.sleep(self._tick_freq_seconds)
 
         except Exception as e:
@@ -261,15 +261,6 @@ class IbkrStrategy:
             trade.cancelEvent += self.on_order_cancelled
             trades.append(trade)
         return trades
-    
-    
-    def print_msg(self, msg: str, overwrite: bool = False) -> None:
-        formatted = f"{self.now.strftime('%Y-%m-%d %H:%M:%S')} | {msg}"
-        if overwrite:
-            # Use carriage return to move to start, then ANSI escape to clear line
-            print(f"\r\033[K{formatted}", end="", flush=True)
-        else:
-            print(formatted) 
     
     
     def position_as_str(self, position: Union[Position, List[Position]]) -> str:

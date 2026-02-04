@@ -326,7 +326,20 @@
                     </table>
                 </div>
 
-                <!-- Live Indicator --> 
+                <!-- Console Log Section (Collapsible) -->
+                <div class="d-flex align-items-center mb-2">
+                    <h5 class="mb-0">Console</h5>
+                    <button id="console-toggle-btn" class="btn btn-sm btn-outline-secondary ms-2 py-0" type="button" data-bs-toggle="collapse" data-bs-target="#console-collapse" aria-expanded="false" aria-controls="console-collapse">
+                        Show
+                    </button>
+                </div>
+                <div class="collapse" id="console-collapse">
+                    <div id="console-container" class="card bg-dark overflow-hidden mb-3" style="max-height: 300px; overflow: auto;">
+                        <pre id="console-output" class="mb-0 p-2 text-monospace small" style="font-size: 0.75rem; white-space: pre;"></pre>
+                    </div>
+                </div>
+
+                <!-- Live Indicator -->
                 <div class="text-center text-secondary small mt-3">
                     <span class="live-indicator"></span>Live updates | Last: <span id="last-updated">{{ last_updated }}</span>
                 </div>
@@ -803,6 +816,28 @@
         if (el('acct-excess-liq')) el('acct-excess-liq').textContent = formatCurrency(summary.excess_liquidity);
     }
 
+    function renderConsoleLogs(logs) {
+        const container = document.getElementById('console-container');
+        const output = document.getElementById('console-output');
+        if (!output || !logs) return;
+
+        // Build the log output with timestamps
+        let html = '';
+        logs.forEach(log => {
+            const escapedText = log.text
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+            html += `<span class="text-secondary">[${log.time}]</span> ${escapedText}\n`;
+        });
+        output.innerHTML = html;
+
+        // Auto-scroll to bottom if user hasn't scrolled up
+        if (container.scrollHeight - container.scrollTop <= container.clientHeight + 50) {
+            container.scrollTop = container.scrollHeight;
+        }
+    }
+
     // Connect to Server-Sent Events for live updates
     const eventSource = new EventSource('/events');
 
@@ -813,6 +848,7 @@
         renderPositions(data.positions);
         renderOrders(data.orders);
         renderTrades(data.trades);
+        renderConsoleLogs(data.console_logs);
         document.getElementById('last-updated').textContent = data.last_updated;
 
         // Update the chart contract dropdown
@@ -831,5 +867,17 @@
     eventSource.onerror = function() {
         console.log('SSE connection lost, will retry...');
     };
+
+    // Toggle console button text based on collapse state
+    const consoleCollapse = document.getElementById('console-collapse');
+    const consoleToggleBtn = document.getElementById('console-toggle-btn');
+    if (consoleCollapse && consoleToggleBtn) {
+        consoleCollapse.addEventListener('show.bs.collapse', function() {
+            consoleToggleBtn.textContent = 'Hide';
+        });
+        consoleCollapse.addEventListener('hide.bs.collapse', function() {
+            consoleToggleBtn.textContent = 'Show';
+        });
+    }
 </script>
 </html>

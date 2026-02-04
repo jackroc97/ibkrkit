@@ -46,7 +46,7 @@ class IbkrOptionChain:
 
     async def _update_chain(self, write_status: bool = False) -> None:
         if write_status:
-            print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Fetching options chain for {self.contract.symbol}...", flush=True)
+            print(f"Fetching options chain for {self.contract.symbol}...", flush=True)
         
         print(f"Requesting options chain for {self.contract.symbol}, {self.contract.exchange}, {self.contract.secType}, {self.contract.conId}")
         
@@ -109,7 +109,7 @@ class IbkrOptionChain:
                 
                 updated_count += 1
                 if write_status:
-                    print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Requesting market data for {updated_count} of {len(self._chain_flat)*2} options...", end='\r', flush=True)
+                    print(f"Requesting market data for {updated_count} of {len(self._chain_flat)*2} options...", end='\r', flush=True)
                     await asyncio.sleep(0.01)
                 
                 # Create the contract object and fetch the ticker
@@ -129,7 +129,7 @@ class IbkrOptionChain:
             print(flush=True) # Don't print over the last line in the status counter
         
         # Always write the the option chain was updated
-        print(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Option chain updated; added {updated_count} contracts.", flush=True)
+        print(f"Option chain updated; added {updated_count} contracts.", flush=True)
         
         
     async def _fetch_option_ticker(self, contract: Contract) -> None:
