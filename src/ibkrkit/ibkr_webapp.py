@@ -88,6 +88,11 @@ class WebappDataStore:
             self._account_summary = account_summary or {}
             self._last_updated = datetime.now().strftime("%H:%M:%S")
 
+    def update_state(self, state: str) -> None:
+        """Update only the connection state, preserving all other data (called from main event loop)."""
+        with self._lock:
+            self._state = state
+
     def get_snapshot(self) -> dict:
         """Get a consistent snapshot of all data (called from Flask thread)."""
         with self._lock:
@@ -116,6 +121,8 @@ class IbkrWebapp:
     Runs standalone with its own IB connection. Can be used independently
     of IbkrStrategy to monitor positions, orders, and trades.
     """
+
+    _RECONNECT_DELAYS = [5, 15, 30, 60, 120, 300]  # seconds, caps at 5 min
 
     def __init__(
         self,
@@ -155,9 +162,19 @@ class IbkrWebapp:
         # Breakeven data for chart price lines (thread-safe access required)
         self._breakevens: dict[int, list[dict]] = {}  # underlying conId -> list of breakeven info
 
-        # Day start/stop times for sleeping state (set via start())
+        # Day start/stop times (retained for API compatibility; no longer used for state)
         self._day_start_time: time | None = None
         self._day_stop_time: time | None = None
+
+        # Connection params stored for reconnect attempts
+        self._host: str = ""
+        self._port: int = 0
+        self._client_id: int = 0
+
+        # Reconnect state
+        self._reconnect_attempt: int = 0
+        self._next_reconnect_at: float = 0.0
+        self._reconnecting: bool = False
 
     def _create_app(self) -> Flask:
         """Create and configure the Flask application."""
@@ -238,21 +255,10 @@ class IbkrWebapp:
 
     def _compute_state(self) -> str:
         """Compute current connection state."""
+        if self._reconnecting:
+            return "Reconnecting"
         if self.ib is None or not self.ib.isConnected():
             return "Disconnected"
-
-        # Check if we're in the sleeping period (outside day_start_time to day_stop_time)
-        if self._day_start_time is not None and self._day_stop_time is not None:
-            now = datetime.now().time()
-            # Handle normal case (start < stop, e.g., 9:30 to 16:00)
-            if self._day_start_time <= self._day_stop_time:
-                if not (self._day_start_time <= now <= self._day_stop_time):
-                    return "Sleeping"
-            else:
-                # Handle overnight case (start > stop, e.g., 18:00 to 05:00)
-                if not (now >= self._day_start_time or now <= self._day_stop_time):
-                    return "Sleeping"
-
         return "Connected"
 
     def _collect_account_summary(self) -> dict:
@@ -1497,6 +1503,49 @@ class IbkrWebapp:
     # Lifecycle
     # -------------------------------------------------------------------------
 
+    async def _attempt_reconnect(self) -> bool:
+        """Attempt to reconnect to IB Gateway with exponential backoff.
+
+        Returns True if reconnect succeeded, False otherwise.
+        """
+        now = asyncio.get_event_loop().time()
+        if now < self._next_reconnect_at:
+            return False  # Too soon; wait for backoff window
+
+        self._reconnecting = True
+        self._reconnect_attempt += 1
+        delay = self._RECONNECT_DELAYS[
+            min(self._reconnect_attempt - 1, len(self._RECONNECT_DELAYS) - 1)
+        ]
+        self._next_reconnect_at = now + delay
+
+        print(
+            f"[Webapp] IB connection lost. Reconnect attempt {self._reconnect_attempt} "
+            f"(next in {delay}s if this fails)..."
+        )
+
+        try:
+            if self.ib is not None:
+                try:
+                    self.ib.disconnect()
+                except Exception:
+                    pass
+            self.ib = IB()
+            self.ib.connect(host=self._host, port=self._port, clientId=self._client_id)
+            if self.ib.isConnected():
+                print("[Webapp] Successfully reconnected to IB.")
+                self._bar_subscriptions.clear()
+                self._bid_ask_tickers.clear()
+                self._reconnect_attempt = 0
+                self._next_reconnect_at = 0.0
+                self._reconnecting = False
+                return True
+        except Exception as e:
+            print(f"[Webapp] Reconnect attempt {self._reconnect_attempt} failed: {e}")
+
+        self._reconnecting = False
+        return False
+
     async def _data_collection_loop(self) -> None:
         """Collect data periodically in the background.
 
@@ -1507,6 +1556,10 @@ class IbkrWebapp:
             try:
                 if self.ib is not None and self.ib.isConnected():
                     await self.collect_data()
+                else:
+                    await self._attempt_reconnect()
+                    # Push state update so SSE reflects Reconnecting/Disconnected immediately
+                    self._data_store.update_state(self._compute_state())
             except Exception as e:
                 print(f"[Webapp] Error in data collection loop: {e}")
             await asyncio.sleep(2)
@@ -1549,6 +1602,9 @@ class IbkrWebapp:
 
         self._day_start_time = day_start_time
         self._day_stop_time = day_stop_time
+        self._host = host
+        self._port = port
+        self._client_id = client_id
         import nest_asyncio
         nest_asyncio.apply()
 

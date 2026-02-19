@@ -19,6 +19,10 @@ class IbkrStrategy:
         self._day_stop_time: Optional[time] = None
         self._tick_freq_seconds: int = 5
         self._weekday_only: bool = True
+        self._host: str = "127.0.0.1"
+        self._port: int = 7496
+        self._client_id: int = 1
+        self._account_id: str = ""
 
     @property
     def is_live(self) -> bool:
@@ -50,6 +54,10 @@ class IbkrStrategy:
         self._day_stop_time = day_stop_time
         self._tick_freq_seconds = tick_freq_seconds
         self._weekday_only = weekday_only
+        self._host = host
+        self._port = port
+        self._client_id = client_id
+        self._account_id = account_id
         asyncio.run(self._run(host, port, client_id, account_id=account_id))
 
 
@@ -70,6 +78,32 @@ class IbkrStrategy:
             # Main loop - runs indefinitely until interrupted
             while True:
                 self.now = datetime.now()
+
+                # Check connection health and attempt reconnect if needed
+                if not self.ib.isConnected():
+                    print("[Strategy] Connection lost. Attempting to reconnect...")
+                    try:
+                        self.ib.disconnect()
+                    except Exception:
+                        pass
+                    self.ib = IB()
+                    try:
+                        self.ib.connect(
+                            host=self._host,
+                            port=self._port,
+                            clientId=self._client_id,
+                            account=self._account_id,
+                        )
+                        if self.ib.isConnected():
+                            print("[Strategy] Reconnected to IB.")
+                            await self.on_reconnect()
+                    except Exception as e:
+                        print(f"[Strategy] Reconnect failed: {e}")
+                        await asyncio.sleep(30)
+                        continue
+                    if not self.ib.isConnected():
+                        await asyncio.sleep(30)
+                        continue
 
                 # Check for mode transitions
                 await self._check_mode_transition()
@@ -167,6 +201,11 @@ class IbkrStrategy:
 
     async def on_strategy_init(self):
         """Called once when the strategy is initialized. Override in subclass."""
+        pass
+
+    async def on_reconnect(self):
+        """Called when the strategy successfully reconnects to IB Gateway after a disconnect.
+        Override in subclass to re-establish subscriptions or reset state as needed."""
         pass
 
     async def on_strategy_shutdown(self):
