@@ -36,7 +36,7 @@ class IbkrDataStream:
         t = datetime.now()
         while not len(self._df):
             util.sleep(1)
-            if (datetime.now() - t).seconds > 30:
+            if (datetime.now() - t).seconds > 300:
                 raise TimeoutError("Timeout waiting for initial market data.")
         
         print(f"Data stream for {self.contract.localSymbol} started.")    

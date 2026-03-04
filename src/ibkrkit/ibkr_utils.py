@@ -29,7 +29,6 @@ async def wait_for_ibkr_ready(host="127.0.0.1", port=4004, client_id: int = 99, 
 
 
 def place_bracket_order(strategy: IbkrStrategy, contract: Contract, open_action: str, quantity: int, limit_price: float, take_profit_price: float, stop_loss_price: float = None):
-    ...
     close_action = "SELL" if open_action == "BUY" else "BUY"
     
     order = LimitOrder(action=open_action, totalQuantity=quantity, lmtPrice=limit_price, tif="GTC")
