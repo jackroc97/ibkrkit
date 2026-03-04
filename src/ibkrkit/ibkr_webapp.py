@@ -1157,6 +1157,40 @@ class IbkrWebapp:
     # Bar Data Streaming (for charts)
     # -------------------------------------------------------------------------
 
+    def _get_chart_duration_str(self, bar_size_minutes: int = 1) -> str:
+        """Compute the durationStr for historical data requests.
+
+        Uses the session start date of the oldest filled order as the lookback
+        start. Falls back to '1 D' (current session) if no fills exist or on error.
+
+        IB API limits: 1-min bars max 7 days, 5-min bars max 30 days.
+        """
+        try:
+            fills = self.ib.fills() if self.ib else []
+            if not fills:
+                return "1 D"
+
+            from zoneinfo import ZoneInfo
+            et = ZoneInfo("America/New_York")
+
+            oldest_fill_time = min(fill.time for fill in fills)
+            if oldest_fill_time.tzinfo is None:
+                oldest_fill_time = oldest_fill_time.replace(tzinfo=timezone.utc)
+
+            session_start_date = oldest_fill_time.astimezone(et).date()
+            today = datetime.now(et).date()
+
+            days_needed = (today - session_start_date).days + 1
+            if days_needed <= 1:
+                return "1 D"
+
+            max_days = 7 if bar_size_minutes <= 1 else 30
+            days_needed = min(days_needed, max_days)
+            return f"{days_needed} D"
+        except Exception as e:
+            print(f"[Chart] Error computing chart duration: {e}")
+            return "1 D"
+
     async def _start_bar_stream(self, contract: Contract) -> bool:
         """Start a bar data stream for a contract with keepUpToDate.
 
@@ -1196,7 +1230,7 @@ class IbkrWebapp:
                 bars = await self.ib.reqHistoricalDataAsync(
                     contract,
                     endDateTime="",
-                    durationStr="1 D",
+                    durationStr=self._get_chart_duration_str(bar_size_minutes=1),
                     barSizeSetting="1 min",
                     whatToShow=what_to_show,
                     useRTH=False,
@@ -1471,7 +1505,7 @@ class IbkrWebapp:
                     self.ib.reqHistoricalDataAsync(
                         contract,
                         endDateTime="",
-                        durationStr="1 D",
+                        durationStr=self._get_chart_duration_str(bar_size_minutes=5),
                         barSizeSetting="5 mins",
                         whatToShow=what_to_show,
                         useRTH=False,
