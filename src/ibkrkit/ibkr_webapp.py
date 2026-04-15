@@ -24,6 +24,7 @@ from typing import Any
 from flask import Flask, render_template, Response, jsonify
 
 from ib_async import IB, Option, FuturesOption, Future, Bag, Contract, ContractDetails
+from .log import log, LogTag
 
 
 _ANSI_CURSOR_UP = re.compile(r'\x1b\[\d+A')
@@ -413,7 +414,7 @@ class IbkrWebapp:
                 return qualified[0]
 
         except Exception as e:
-            print(f"[Chart] Error getting underlying for {contract.localSymbol}: {e}")
+            log(LogTag.WARN, f"[Chart] Error getting underlying for {contract.localSymbol}: {e}")
 
         return None
 
@@ -613,7 +614,7 @@ class IbkrWebapp:
 
         except Exception as e:
             import traceback
-            print(f"[Breakevens] Error collecting breakevens: {e}")
+            log(LogTag.WARN, f"[Breakevens] Error collecting breakevens: {e}")
             traceback.print_exc()
 
     async def _collect_positions(self) -> list[dict]:
@@ -893,7 +894,7 @@ class IbkrWebapp:
                     })
         except Exception as e:
             import traceback
-            print(f"[ERROR] _collect_orders exception: {e}")
+            log(LogTag.WARN, f"[ERROR] _collect_orders exception: {e}")
             traceback.print_exc()
 
         return orders
@@ -1035,7 +1036,7 @@ class IbkrWebapp:
                 })
         except Exception as e:
             import traceback
-            print(f"[ERROR] _collect_trades exception: {e}")
+            log(LogTag.WARN, f"[ERROR] _collect_trades exception: {e}")
             traceback.print_exc()
 
         trades.sort(key=lambda x: x["time_sort"], reverse=True)
@@ -1157,7 +1158,7 @@ class IbkrWebapp:
 
         except Exception as e:
             import traceback
-            print(f"[Chart] Error collecting chart contracts: {e}")
+            log(LogTag.WARN, f"[Chart] Error collecting chart contracts: {e}")
             traceback.print_exc()
 
         return chart_contracts
@@ -1197,7 +1198,7 @@ class IbkrWebapp:
             days_needed = min(days_needed, max_days)
             return f"{days_needed} D"
         except Exception as e:
-            print(f"[Chart] Error computing chart duration: {e}")
+            log(LogTag.WARN, f"[Chart] Error computing chart duration: {e}")
             return "1 D"
 
     async def _start_bar_stream(self, contract: Contract) -> bool:
@@ -1216,10 +1217,10 @@ class IbkrWebapp:
             if qualified:
                 contract = qualified[0]
             else:
-                print(f"[Chart] Could not qualify contract {contract.localSymbol or contract.symbol}")
+                log(LogTag.WARN, f"[Chart] Could not qualify contract {contract.localSymbol or contract.symbol}")
                 return False
         except Exception as e:
-            print(f"[Chart] Error qualifying contract {contract.localSymbol or contract.symbol}: {e}")
+            log(LogTag.WARN, f"[Chart] Error qualifying contract {contract.localSymbol or contract.symbol}: {e}")
             return False
 
         # For options/futures options, use real-time bars (no historical data)
@@ -1251,7 +1252,7 @@ class IbkrWebapp:
                     self._bar_subscriptions[con_id] = bars
                     self._store_bar_data(con_id, bars)
                     bars.updateEvent += lambda b, hasNewBar, cid=con_id: self._on_bar_update(cid, b, hasNewBar)
-                    print(f"[Chart] Started historical bar stream for {contract.localSymbol or contract.symbol} ({con_id}) using {what_to_show}")
+                    log(LogTag.INFO, f"[Chart] Started historical bar stream for {contract.localSymbol or contract.symbol} ({con_id}) using {what_to_show}")
 
                     # Also request market data for bid/ask
                     try:
@@ -1259,15 +1260,15 @@ class IbkrWebapp:
                         if ticker is not None:
                             self._bid_ask_tickers[con_id] = ticker
                     except Exception as e:
-                        print(f"[Chart] Could not get bid/ask ticker for {contract.localSymbol or contract.symbol}: {e}")
+                        log(LogTag.WARN, f"[Chart] Could not get bid/ask ticker for {contract.localSymbol or contract.symbol}: {e}")
 
                     return True
 
             except Exception as e:
-                print(f"[Chart] {what_to_show} failed for {contract.localSymbol or contract.symbol}: {e}")
+                log(LogTag.WARN, f"[Chart] {what_to_show} failed for {contract.localSymbol or contract.symbol}: {e}")
                 continue
 
-        print(f"[Chart] Could not start bar stream for {contract.localSymbol or contract.symbol}")
+        log(LogTag.WARN, f"[Chart] Could not start bar stream for {contract.localSymbol or contract.symbol}")
         return False
 
     async def _start_realtime_bar_stream(self, contract: Contract) -> bool:
@@ -1300,13 +1301,13 @@ class IbkrWebapp:
 
                 # Subscribe to ticker updates - will aggregate into 1-minute bars
                 ticker.updateEvent += lambda t, cid=con_id: self._on_ticker_update(cid, t)
-                print(f"[Chart] Started market data stream for {contract.localSymbol or contract.symbol} ({con_id})")
+                log(LogTag.INFO, f"[Chart] Started market data stream for {contract.localSymbol or contract.symbol} ({con_id})")
                 return True
 
         except Exception as e:
-            print(f"[Chart] Market data stream failed for {contract.localSymbol or contract.symbol}: {e}")
+            log(LogTag.WARN, f"[Chart] Market data stream failed for {contract.localSymbol or contract.symbol}: {e}")
 
-        print(f"[Chart] Could not start market data stream for {contract.localSymbol or contract.symbol}")
+        log(LogTag.WARN, f"[Chart] Could not start market data stream for {contract.localSymbol or contract.symbol}")
         return False
 
     def _on_ticker_update(self, con_id: int, ticker) -> None:
@@ -1420,7 +1421,7 @@ class IbkrWebapp:
                     except Exception:
                         pass  # Already cancelled or invalid
             except Exception as e:
-                print(f"[Chart] Error stopping bar stream for {con_id}: {e}")
+                log(LogTag.WARN, f"[Chart] Error stopping bar stream for {con_id}: {e}")
             del self._bar_subscriptions[con_id]
 
             with self._bar_data_lock:
@@ -1494,11 +1495,11 @@ class IbkrWebapp:
         """
         contract = self._contract_cache.get(con_id)
         if not contract:
-            print(f"[Chart] No contract found for conId {con_id}")
+            log(LogTag.WARN, f"[Chart] No contract found for conId {con_id}")
             return []
 
         if self._loop is None:
-            print("[Chart] No event loop available")
+            log(LogTag.WARN, "[Chart] No event loop available")
             return []
 
         # For options, try MIDPOINT first, then BID_ASK as fallback
@@ -1536,10 +1537,10 @@ class IbkrWebapp:
                         for bar in bars
                     ]
             except Exception as e:
-                print(f"[Chart] Error fetching {what_to_show} data for {con_id}: {e}")
+                log(LogTag.WARN, f"[Chart] Error fetching {what_to_show} data for {con_id}: {e}")
                 continue
 
-        print(f"[Chart] No data available for conId {con_id}")
+        log(LogTag.WARN, f"[Chart] No data available for conId {con_id}")
         return []
 
     # -------------------------------------------------------------------------
@@ -1562,7 +1563,7 @@ class IbkrWebapp:
         ]
         self._next_reconnect_at = now + delay
 
-        print(
+        log(LogTag.WARN,
             f"[Webapp] IB connection lost. Reconnect attempt {self._reconnect_attempt} "
             f"(next in {delay}s if this fails)..."
         )
@@ -1576,7 +1577,7 @@ class IbkrWebapp:
             self.ib = IB()
             self.ib.connect(host=self._host, port=self._port, clientId=self._client_id)
             if self.ib.isConnected():
-                print("[Webapp] Successfully reconnected to IB.")
+                log(LogTag.INFO, "[Webapp] Successfully reconnected to IB.")
                 self._bar_subscriptions.clear()
                 self._bid_ask_tickers.clear()
                 self._reconnect_attempt = 0
@@ -1584,7 +1585,7 @@ class IbkrWebapp:
                 self._reconnecting = False
                 return True
         except Exception as e:
-            print(f"[Webapp] Reconnect attempt {self._reconnect_attempt} failed: {e}")
+            log(LogTag.WARN, f"[Webapp] Reconnect attempt {self._reconnect_attempt} failed: {e}")
 
         self._reconnecting = False
         return False
@@ -1604,7 +1605,7 @@ class IbkrWebapp:
                     # Push state update so SSE reflects Reconnecting/Disconnected immediately
                     self._data_store.update_state(self._compute_state())
             except Exception as e:
-                print(f"[Webapp] Error in data collection loop: {e}")
+                log(LogTag.WARN, f"[Webapp] Error in data collection loop: {e}")
             await asyncio.sleep(2)
 
     def start(
@@ -1658,7 +1659,7 @@ class IbkrWebapp:
             port=port,
             clientId=client_id,
         )
-        print(f"[Webapp] Connected to IB at {host}:{port} with client ID {client_id}")
+        log(LogTag.INFO, f"[Webapp] Connected to IB at {host}:{port} with client ID {client_id}")
 
         # Capture the current event loop for async calls from Flask thread
         try:
@@ -1687,7 +1688,7 @@ class IbkrWebapp:
 
         self._thread = threading.Thread(target=run_flask, daemon=True)
         self._thread.start()
-        print(f"Webapp started on http://localhost:{webapp_port}")
+        log(LogTag.INFO, f"Webapp started on http://localhost:{webapp_port}")
 
     def stop(self) -> None:
         """Stop the webapp and clean up resources."""
@@ -1705,7 +1706,7 @@ class IbkrWebapp:
         # Disconnect from IB
         if self.ib is not None and self.ib.isConnected():
             self.ib.disconnect()
-            print("[Webapp] Disconnected from IB")
+            log(LogTag.INFO, "[Webapp] Disconnected from IB")
 
         # Restore original stdout/stderr
         if hasattr(self, '_original_stdout') and self._original_stdout:

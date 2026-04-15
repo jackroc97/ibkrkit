@@ -7,6 +7,8 @@ from typing import List, Optional, Union
 
 from ib_async import *
 
+from .log import log, LogTag
+
 
 class IbkrStrategy:
     name: str
@@ -81,7 +83,7 @@ class IbkrStrategy:
 
                 # Check connection health and attempt reconnect if needed
                 if not self.ib.isConnected():
-                    print("[Strategy] Connection lost. Attempting to reconnect...")
+                    log(LogTag.WARN, "Connection lost. Attempting to reconnect...")
                     try:
                         self.ib.disconnect()
                     except Exception:
@@ -95,10 +97,10 @@ class IbkrStrategy:
                             account=self._account_id,
                         )
                         if self.ib.isConnected():
-                            print("[Strategy] Reconnected to IB.")
+                            log(LogTag.INFO, "Reconnected to IB.")
                             await self.on_reconnect()
                     except Exception as e:
-                        print(f"[Strategy] Reconnect failed: {e}")
+                        log(LogTag.WARN, f"Reconnect failed: {e}")
                         await asyncio.sleep(30)
                         continue
                     if not self.ib.isConnected():
@@ -113,7 +115,7 @@ class IbkrStrategy:
                     await self.tick()
                     await asyncio.sleep(self._tick_freq_seconds)
                 else:
-                    print(f"Strategy is in sleep mode between {self._day_stop_time} and {self._day_start_time}")
+                    log(LogTag.INFO, f"Strategy is in sleep mode between {self._day_stop_time} and {self._day_start_time}")
                     await asyncio.sleep(self._tick_freq_seconds)
 
         except Exception as e:

@@ -4,6 +4,7 @@ import pandas as pd
 from ib_async import *
 
 from ibkrkit.ibkr_data_store import IbkrDataStore
+from .log import log, LogTag
 
 
 class IbkrDataStream:
@@ -22,7 +23,7 @@ class IbkrDataStream:
         
     
     async def _start(self) -> None:
-        print(f"Starting data stream for {self.contract.localSymbol}...")
+        log(LogTag.INFO, f"Starting data stream for {self.contract.localSymbol}...")
         
         # Qualify the contract, request market data, and the default update handler
         self._ticker = await IbkrDataStore.req_market_data_stream(self.contract)
@@ -39,7 +40,7 @@ class IbkrDataStream:
             if (datetime.now() - t).seconds > 300:
                 raise TimeoutError("Timeout waiting for initial market data.")
         
-        print(f"Data stream for {self.contract.localSymbol} started.")    
+        log(LogTag.INFO, f"Data stream for {self.contract.localSymbol} started.")    
                                 
     
     def get(self, name: str, at_time: datetime = None, bars_ago: int = None) -> any:

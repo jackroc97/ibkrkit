@@ -7,6 +7,7 @@ import pandas as pd
 from ib_async import *
 
 from ibkrkit.ibkr_data_store import IbkrDataStore
+from .log import log, LogTag
 
 
 class IbkrOptionChain:
@@ -46,17 +47,17 @@ class IbkrOptionChain:
 
     async def _update_chain(self, write_status: bool = False) -> None:
         if write_status:
-            print(f"Fetching options chain for {self.contract.symbol}...", flush=True)
-        
-        print(f"Requesting options chain for {self.contract.localSymbol}, {self.contract.exchange}, {self.contract.secType}, {self.contract.conId}")
-        
+            log(LogTag.INFO, f"Fetching options chain for {self.contract.symbol}...")
+
+        log(LogTag.INFO, f"Requesting options chain for {self.contract.localSymbol}, {self.contract.exchange}, {self.contract.secType}, {self.contract.conId}")
+
         # Request the options chain from IBKR TWS
         chain = IbkrDataStore.req_sec_def_opt_params(self.contract.symbol,
                                                      self.contract.exchange,
                                                      self.contract.secType,
                                                      self.contract.conId)
 
-        print(f"Received options chain for {self.contract.symbol} with {len(chain)} rows.")
+        log(LogTag.INFO, f"Received options chain for {self.contract.symbol} with {len(chain)} rows.")
         
         # Flatten the options chain data into a DataFrame
         rows = []
@@ -96,6 +97,12 @@ class IbkrOptionChain:
         # well-filtered chains using the max_strike_dist and max_dte parameters
         rights = ['P', 'C']
         updated_count = 0
+        total_options = len(self._chain_flat) * 2
+        progress_msg = f"Requesting market data for {self.contract.symbol} options..."
+
+        if write_status:
+            log(LogTag.INFO, progress_msg, current_progress=0, max_progress=total_options)
+
         for _, opt in self._chain_flat.iterrows():
             for right in rights:
                 # Do not fetch this ticker if we already have it!
@@ -106,12 +113,12 @@ class IbkrOptionChain:
                 key = (opt["expiration"], opt["strike"], right.lower())
                 if key in self._contract_tickers.keys():
                     continue
-                
+
                 updated_count += 1
                 if write_status:
-                    print(f"Requesting market data for {updated_count} of {len(self._chain_flat)*2} options...", end='\r', flush=True)
+                    log(LogTag.INFO, progress_msg, current_progress=updated_count, max_progress=total_options)
                     await asyncio.sleep(0.01)
-                
+
                 # Create the contract object and fetch the ticker
                 contract = Contract(
                     secType="FOP" if self.contract.secType == "FUT" else "OPT",
@@ -124,12 +131,8 @@ class IbkrOptionChain:
                     tradingClass=opt['tradingClass'],
                 )
                 await self._fetch_option_ticker(contract)
-        
-        if write_status:
-            print(flush=True) # Don't print over the last line in the status counter
-        
-        # Always write the the option chain was updated
-        print(f"Option chain updated; added {updated_count} contracts.", flush=True)
+
+        log(LogTag.INFO, f"Option chain updated for {self.contract.symbol}; added {updated_count} contracts.")
         
         
     async def _fetch_option_ticker(self, contract: Contract) -> None:
