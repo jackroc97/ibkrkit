@@ -18,7 +18,7 @@ def log(tag: LogTag, message: str, current_progress: int = None, max_progress: i
     global _last_progress_line_count
 
     timestamp = datetime.now().strftime("%H:%M:%S")
-    prefix = f"[{timestamp}] [{tag.value}] "
+    prefix = f"{timestamp} [{tag.value}] "
     indent = " " * len(prefix)
     lines = message.splitlines()
     formatted = prefix + ("\n" + indent).join(lines)

@@ -850,7 +850,7 @@
                 .replace(/</g, '&lt;')
                 .replace(/>/g, '&gt;');
             const styledText = escapedText
-                .replace(/\[\d{2}:\d{2}:\d{2}\]/g, m =>
+                .replace(/\d{2}:\d{2}:\d{2}/g, m =>
                     `<span class="text-secondary">${m}</span>`)
                 .replace(/\[([A-Z]{4})\]/g, (m, tag) => {
                     const cls = tagColors[tag] ?? 'text-light';
