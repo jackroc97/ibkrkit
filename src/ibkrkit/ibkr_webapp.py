@@ -26,10 +26,7 @@ from ib_async import IB, Option, FuturesOption, Future, Bag, Contract, ContractD
 
 
 class OutputCapture(io.TextIOBase):
-    """Captures stdout/stderr to a thread-safe buffer while preserving original output.
-
-    Each line is stored with a timestamp for display in the webapp.
-    """
+    """Captures stdout/stderr to a thread-safe buffer while preserving original output."""
 
     def __init__(self, original_stream, buffer: deque, lock: threading.Lock):
         self._original = original_stream
@@ -40,11 +37,10 @@ class OutputCapture(io.TextIOBase):
         # Always write to original stream
         result = self._original.write(text)
 
-        # Store non-empty lines in buffer with timestamp
+        # Store non-empty lines in buffer (timestamp is prepended by log())
         if text.strip():
-            timestamp = datetime.now().strftime("%H:%M:%S")
             with self._lock:
-                self._buffer.append({"time": timestamp, "text": text.rstrip()})
+                self._buffer.append({"text": text.rstrip()})
 
         return result
 

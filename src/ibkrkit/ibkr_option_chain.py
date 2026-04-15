@@ -48,15 +48,15 @@ class IbkrOptionChain:
         if write_status:
             print(f"Fetching options chain for {self.contract.symbol}...", flush=True)
         
-        print(f"Requesting options chain for {self.contract.symbol}, {self.contract.exchange}, {self.contract.secType}, {self.contract.conId}")
+        print(f"Requesting options chain for {self.contract.localSymbol}, {self.contract.exchange}, {self.contract.secType}, {self.contract.conId}")
         
         # Request the options chain from IBKR TWS
         chain = IbkrDataStore.req_sec_def_opt_params(self.contract.symbol,
                                                      self.contract.exchange,
                                                      self.contract.secType,
                                                      self.contract.conId)
-        
-        print(f"Received options chain with {len(chain)} rows.")
+
+        print(f"Received options chain for {self.contract.symbol} with {len(chain)} rows.")
         
         # Flatten the options chain data into a DataFrame
         rows = []

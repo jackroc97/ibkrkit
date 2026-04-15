@@ -835,14 +835,28 @@
         const output = document.getElementById('console-output');
         if (!output || !logs) return;
 
-        // Build the log output with timestamps
+        const tagColors = {
+            'INFO': 'text-info',
+            'TICK': 'text-secondary',
+            'ORDR': 'text-success',
+            'FILL': 'text-warning',
+            'WARN': 'text-danger',
+        };
+
         let html = '';
-        logs.forEach(log => {
-            const escapedText = log.text
+        logs.forEach(entry => {
+            const escapedText = entry.text
                 .replace(/&/g, '&amp;')
                 .replace(/</g, '&lt;')
                 .replace(/>/g, '&gt;');
-            html += `<span class="text-secondary">[${log.time}]</span> ${escapedText}\n`;
+            const styledText = escapedText
+                .replace(/\[\d{2}:\d{2}:\d{2}\]/g, m =>
+                    `<span class="text-secondary">${m}</span>`)
+                .replace(/\[([A-Z]{4})\]/g, (m, tag) => {
+                    const cls = tagColors[tag] ?? 'text-light';
+                    return `<span class="${cls} fw-bold">${m}</span>`;
+                });
+            html += `${styledText}\n`;
         });
         output.innerHTML = html;
 
