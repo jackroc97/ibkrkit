@@ -12,6 +12,7 @@ Architecture:
 import asyncio
 import io
 import json
+import re
 import sys
 import threading
 import time as time_module
@@ -23,6 +24,10 @@ from typing import Any
 from flask import Flask, render_template, Response, jsonify
 
 from ib_async import IB, Option, FuturesOption, Future, Bag, Contract, ContractDetails
+
+
+_ANSI_CURSOR_UP = re.compile(r'\x1b\[\d+A')
+_ANSI_STRIP = re.compile(r'\x1b\[[0-9;]*[A-Za-z]')
 
 
 class OutputCapture(io.TextIOBase):
@@ -37,10 +42,18 @@ class OutputCapture(io.TextIOBase):
         # Always write to original stream
         result = self._original.write(text)
 
-        # Store non-empty lines in buffer (timestamp is prepended by log())
-        if text.strip():
+        # Cursor-up sequence signals a progress overwrite — pop the previous entry
+        if _ANSI_CURSOR_UP.search(text):
             with self._lock:
-                self._buffer.append({"text": text.rstrip()})
+                if self._buffer:
+                    self._buffer.pop()
+            return result
+
+        # Strip any residual ANSI codes (e.g. clear-to-end) before storing
+        clean = _ANSI_STRIP.sub('', text)
+        if clean.strip():
+            with self._lock:
+                self._buffer.append({"text": clean.rstrip()})
 
         return result
 
