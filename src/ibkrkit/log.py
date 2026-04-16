@@ -1,5 +1,6 @@
+import inspect
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 
 
@@ -12,10 +13,19 @@ class LogTag(Enum):
 
 
 _last_progress_line_count = 0
+_timeout_registry: dict[str, datetime] = {}
 
 
-def log(tag: LogTag, message: str, current_progress: int = None, max_progress: int = None) -> None:
+def log(tag: LogTag, message: str, current_progress: int = None, max_progress: int = None, timeout: timedelta = None) -> None:
     global _last_progress_line_count
+
+    if timeout is not None:
+        caller = inspect.stack()[1]
+        key = f"{caller.filename}:{caller.lineno}"
+        now = datetime.now()
+        if key in _timeout_registry and now - _timeout_registry[key] < timeout:
+            return
+        _timeout_registry[key] = now
 
     timestamp = datetime.now().strftime("%H:%M:%S")
     prefix = f"{timestamp} [{tag.value}] "

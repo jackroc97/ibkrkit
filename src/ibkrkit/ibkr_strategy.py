@@ -1,7 +1,7 @@
 import asyncio
 import warnings
 
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from traceback import print_exception
 from typing import List, Optional, Union
 
@@ -115,7 +115,7 @@ class IbkrStrategy:
                     await self.tick()
                     await asyncio.sleep(self._tick_freq_seconds)
                 else:
-                    log(LogTag.INFO, f"Strategy is in sleep mode between {self._day_stop_time} and {self._day_start_time}")
+                    log(LogTag.INFO, f"Strategy is in sleep mode between {self._day_stop_time} and {self._day_start_time}", timeout=timedelta(minutes=5))
                     await asyncio.sleep(self._tick_freq_seconds)
 
         except Exception as e:
