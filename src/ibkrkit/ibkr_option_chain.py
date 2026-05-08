@@ -33,7 +33,7 @@ class IbkrOptionChain:
         
     async def _start(self) -> None:
         # Perform the initial update of the chain (will get all desired options)
-        await self._update_chain(write_status=True)
+        await self._update_chain()
         
         # Schedule the chain to be continually updated as the underlying price changes
         async def _update_loop():
@@ -45,19 +45,12 @@ class IbkrOptionChain:
         self.started = True
         
 
-    async def _update_chain(self, write_status: bool = False) -> None:
-        if write_status:
-            log(LogTag.INFO, f"Fetching options chain for {self.contract.symbol}...")
-
-        log(LogTag.INFO, f"Requesting options chain for {self.contract.localSymbol}, {self.contract.exchange}, {self.contract.secType}, {self.contract.conId}")
-
+    async def _update_chain(self) -> None:
         # Request the options chain from IBKR TWS
         chain = IbkrDataStore.req_sec_def_opt_params(self.contract.symbol,
                                                      self.contract.exchange,
                                                      self.contract.secType,
                                                      self.contract.conId)
-
-        log(LogTag.INFO, f"Received options chain for {self.contract.symbol} with {len(chain)} rows.")
         
         # Flatten the options chain data into a DataFrame
         rows = []
@@ -100,8 +93,7 @@ class IbkrOptionChain:
         total_options = len(self._chain_flat) * 2
         progress_msg = f"Requesting market data for {self.contract.symbol} options..."
 
-        if write_status:
-            log(LogTag.INFO, progress_msg, current_progress=0, max_progress=total_options)
+        log(LogTag.INFO, progress_msg, current_progress=0, max_progress=total_options)
 
         for _, opt in self._chain_flat.iterrows():
             for right in rights:
@@ -115,9 +107,10 @@ class IbkrOptionChain:
                     continue
 
                 updated_count += 1
-                if write_status:
-                    log(LogTag.INFO, progress_msg, current_progress=updated_count, max_progress=total_options)
-                    await asyncio.sleep(0.01)
+                
+                # Log the progress of the chain update, since fetching all the tickers can take a while
+                log(LogTag.INFO, progress_msg, current_progress=updated_count, max_progress=total_options)
+                await asyncio.sleep(0.01)
 
                 # Create the contract object and fetch the ticker
                 contract = Contract(
