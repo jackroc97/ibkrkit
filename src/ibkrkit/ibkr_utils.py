@@ -225,8 +225,17 @@ def trade_as_str(trade: Union[Trade, List[Trade]]) -> str:
     if isinstance(trade, list):
         return "[" + ', '.join([trade_as_str(t) for t in trade]) + "]"
 
+    _UNSET = 1.7976931348623157e+308  # ib_async sentinel for unset float fields
     order_type = trade.order.orderType if trade.order.orderType is not None else "MKT"
-    order_price = trade.order.lmtPrice if trade.order.lmtPrice is not None else trade.order.auxPrice if trade.order.auxPrice is not None else ""
+    # STP orders store their price in auxPrice; lmtPrice is always the unset sentinel
+    if order_type == 'STP':
+        order_price = trade.order.auxPrice if trade.order.auxPrice not in (None, _UNSET) else ""
+    elif trade.order.lmtPrice not in (None, _UNSET):
+        order_price = trade.order.lmtPrice
+    elif trade.order.auxPrice not in (None, _UNSET):
+        order_price = trade.order.auxPrice
+    else:
+        order_price = ""
     return f"{trade.order.action} {trade.order.totalQuantity} {contract_as_str(trade.contract)} @ {order_type} {order_price} ({trade.orderStatus.status})"
 
 
